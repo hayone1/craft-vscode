@@ -1,0 +1,150 @@
+{
+  "name": "craft-vscode",
+  "displayName": "Craft Apps",
+  "description": "Open the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) from craft-ai-hub in editor panels, and let Claude Code drive them over MCP.",
+  "version": "0.1.0",
+  "publisher": "hayone1",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hayone1/craft-vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "mcp",
+    "claude",
+    "craft",
+    "photocraft",
+    "code-server"
+  ],
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onWebviewPanel:craft.app"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "craft",
+          "title": "Craft Apps",
+          "icon": "media/craft.svg"
+        }
+      ]
+    },
+    "views": {
+      "craft": [
+        {
+          "id": "craft.apps",
+          "name": "Apps"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "craft.open",
+        "title": "Open App",
+        "category": "Craft",
+        "icon": "$(add)"
+      },
+      {
+        "command": "craft.reload",
+        "title": "Reload App",
+        "category": "Craft",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "craft.signIn",
+        "title": "Sign In to the Hub",
+        "category": "Craft"
+      },
+      {
+        "command": "craft.copyMcpUrl",
+        "title": "Copy MCP Server URL",
+        "category": "Craft"
+      },
+      {
+        "command": "craft.setMcpUrl",
+        "title": "Set an App's MCP URL by Hand",
+        "category": "Craft"
+      },
+      {
+        "command": "craft.registerClaudeCode",
+        "title": "Add the MCP Server to Claude Code",
+        "category": "Craft"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "craft.open",
+          "when": "view == craft.apps",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "craft.reload",
+          "when": "activeWebviewPanelId == craft.app",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Craft Apps",
+      "properties": {
+        "craft.hubUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The craft-ai-hub address, e.g. `https://craft.example.com`. Empty: the `CRAFT_HUB_URL` environment variable."
+        },
+        "craft.apps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "The hub's apps, in order. Empty: `CRAFT_APPS` (comma separated), else PhotoCraft, VectorCraft, LightCraft, FilmCraft and EffectCraft."
+        },
+        "craft.mcpPort": {
+          "type": "number",
+          "default": 47811,
+          "description": "The local port of the MCP server (http://127.0.0.1:<port>/mcp)."
+        },
+        "craft.registerWithClaudeCode": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Add the MCP server to Claude Code (`claude mcp add --scope user craft …`) when the extension starts."
+        }
+      }
+    },
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "craft.mcp",
+        "label": "Craft apps"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "esbuild src/extension.mjs --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=dist/extension.js",
+    "test": "node --test test/*.test.mjs",
+    "package": "npm run build -- --minify && vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "undici": "7.30.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "4.1.0",
+    "esbuild": "0.28.2"
+  }
+}
