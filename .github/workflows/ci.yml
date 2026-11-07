@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  # The Visual Studio Marketplace trusts this workflow's GitHub OIDC token (Trusted Publishing).
+  id-token: write
 
 jobs:
   build:
@@ -33,14 +35,14 @@ jobs:
           version=$(node -p "require('./package.json').version")
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::package.json says $version, the tag $GITHUB_REF_NAME"; exit 1; }
           gh release create "$GITHUB_REF_NAME" "craft-vscode-$version.vsix" --title "$GITHUB_REF_NAME" --generate-notes
-      # Each store publishes the same .vsix. A store whose token secret is missing is skipped.
+      # Both stores publish the same .vsix.
+      # The Visual Studio Marketplace needs no secret: its publisher hayone1 has a Trusted
+      # Publishing policy for this repository and ci.yml, and vsce trades this run's OIDC token for
+      # a 15-minute Marketplace credential.
       - name: Publish to the Visual Studio Marketplace
         if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: |
-          [ -n "$VSCE_PAT" ] || { echo "::notice::No VSCE_PAT secret: skipped the Visual Studio Marketplace"; exit 0; }
-          npx vsce publish --packagePath "craft-vscode-$(node -p "require('./package.json').version").vsix"
+        run: npx vsce publish --oidc --packagePath "craft-vscode-$(node -p "require('./package.json').version").vsix"
+      # Open VSX still uses a token; without the OVSX_PAT secret this step is skipped.
       - name: Publish to Open VSX
         if: startsWith(github.ref, 'refs/tags/v')
         env:

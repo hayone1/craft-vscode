@@ -186,15 +186,19 @@ the token. Both run in plain Node too, and the tests use a temporary home folder
 ## Release
 
 A tag `v<version>` that matches `version` in `package.json` makes the CI build the `.vsix`,
-create a GitHub release, and publish the same `.vsix` to both stores. The CI skips a store whose
-token secret is missing, so a release without the secrets still lands on GitHub.
+create a GitHub release, and publish the same `.vsix` to both stores.
 
-| Secret | Store | How to get the token |
-| --- | --- | --- |
-| `VSCE_PAT` | Visual Studio Marketplace | Create the publisher `hayone1` at https://marketplace.visualstudio.com/manage. Then create an Azure DevOps personal access token with the scope **Marketplace › Manage** and the organization **All accessible organizations**. |
-| `OVSX_PAT` | Open VSX | Sign in at https://open-vsx.org with GitHub, link an Eclipse account and sign the publisher agreement, then create an access token in the settings. Before the first release, run `npx ovsx create-namespace hayone1 -p <token>` once. |
-
-Save both tokens under **Settings › Secrets and variables › Actions** in this repository.
+- **Visual Studio Marketplace.** The CI uses Trusted Publishing, so the repository holds no
+  Marketplace secret. The publisher `hayone1` at https://marketplace.visualstudio.com/manage has
+  a Trusted Publishing policy for the owner `hayone1`, the repository `craft-vscode` and the
+  workflow `ci.yml`, with no environment. `vsce publish --oidc` trades the run's GitHub OIDC
+  token for a Marketplace credential that lasts 15 minutes. Azure DevOps personal access tokens
+  that cover all organizations stop working on December 1, 2026, which is why the CI doesn't use
+  one.
+- **Open VSX.** The CI uses the secret `OVSX_PAT`, and skips Open VSX when the secret is missing.
+  To get the token, sign in at https://open-vsx.org with GitHub, link an Eclipse account, sign
+  the publisher agreement, and create an access token in the settings. Before the first release,
+  run `npx ovsx create-namespace hayone1 -p <token>` once.
 
 `src/bridge.mjs` is the MCP server and its clients (plain Node, tested on its own).
 `src/extension.mjs` is the VS Code side: the panels, the Craft view and the window handover.
