@@ -351,7 +351,7 @@ async function setMcpUrl() {
   const app = activeApp() ?? (await pick());
   if (!app) return;
   const url = await vscode.window.showInputBox({
-    prompt: `${titleOf(app)}'s MCP URL, from the Connect tab of the app's Ask AI panel`, ignoreFocusOut: true,
+    prompt: `${titleOf(app)}'s MCP URL, from the Connect tab of the app's AI chat (the round ✦ button)`, ignoreFocusOut: true,
     validateInput: (v) => (/^https?:\/\/.+\/mcp$/.test(v.trim()) ? null : "A URL that ends in /mcp"),
   });
   if (url) tabChanged(app, { mcp: url.trim(), state: "on", title: titleOf(app) });

@@ -7,7 +7,7 @@ code-server you can do all of it in one browser tab, on an iPad too: the app run
 Claude works in it from the panel next to it while you watch.
 
 The apps come from a [craft-ai-hub](https://github.com/hayone1/craft-ai-hub), so they keep the
-hub's sign-in, cloud storage and **Ask AI** chat. This extension adds:
+hub's sign-in, cloud storage and AI chat (the round ✦ button). This extension adds:
 
 - **A Craft view** in the activity bar that lists the apps. Click one to open it in an editor
   panel. Panels keep running when you switch tabs, and come back after a reload.
@@ -102,7 +102,7 @@ behind Coder, that is the workspace app's origin:
 EMBED_ORIGINS=https://*.code.example.com
 ```
 
-A hub without `EMBED_ORIGINS` still works: open the app's **Ask AI** › **Connect** tab, copy the
+A hub without `EMBED_ORIGINS` still works: open the app's AI chat (the round ✦ button) › **Connect** tab, copy the
 URL, and run **Craft: Set an App's MCP URL by Hand**.
 
 ## Install
