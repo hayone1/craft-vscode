@@ -33,3 +33,18 @@ jobs:
           version=$(node -p "require('./package.json').version")
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::package.json says $version, the tag $GITHUB_REF_NAME"; exit 1; }
           gh release create "$GITHUB_REF_NAME" "craft-vscode-$version.vsix" --title "$GITHUB_REF_NAME" --generate-notes
+      # Each store publishes the same .vsix. A store whose token secret is missing is skipped.
+      - name: Publish to the Visual Studio Marketplace
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          [ -n "$VSCE_PAT" ] || { echo "::notice::No VSCE_PAT secret: skipped the Visual Studio Marketplace"; exit 0; }
+          npx vsce publish --packagePath "craft-vscode-$(node -p "require('./package.json').version").vsix"
+      - name: Publish to Open VSX
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          [ -n "$OVSX_PAT" ] || { echo "::notice::No OVSX_PAT secret: skipped Open VSX"; exit 0; }
+          npx ovsx publish "craft-vscode-$(node -p "require('./package.json').version").vsix"

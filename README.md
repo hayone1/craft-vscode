@@ -1,7 +1,8 @@
 # Craft Apps for VS Code
 
 Open the [storytold craft apps](https://github.com/storytold) (PhotoCraft, VectorCraft, LightCraft,
-FilmCraft, EffectCraft) in VS Code editor panels, and let Claude Code drive them over MCP. With
+FilmCraft, EffectCraft) in VS Code editor panels, and let a coding agent drive them over MCP. The
+agent can be Claude Code, Codex, Gemini CLI or the chat that is built into VS Code. With
 code-server you can do all of it in one browser tab, on an iPad too: the app runs in a panel, and
 Claude works in it from the panel next to it while you watch.
 
@@ -17,11 +18,66 @@ hub's sign-in, cloud storage and **Ask AI** chat. This extension adds:
   - `craft_open` opens an app in the editor and waits until it is connected, so the agent can
     open what it needs.
   - `craft_call` calls any tool of an open app, for clients that miss tool-list updates.
-- **Claude Code setup**: on start, the extension adds the server to Claude Code
-  (`claude mcp add --scope user craft …`) if it isn't there yet. Start a new Claude
-  conversation, and say what you want: "open VectorCraft and draw a gold star".
-- VS Code's own chat gets the same server (an MCP server definition provider), where the
-  editor supports one.
+- **Agent setup**: the extension adds the server, with its token, to the user settings of every
+  coding agent it finds. Start a new agent session, and say what you want: "open VectorCraft and
+  draw a gold star". The next section lists the agents.
+- **A token on every request**: the MCP server only answers requests that carry its token. The
+  section "The MCP token" explains where the token comes from.
+
+## Coding agents
+
+The extension writes the `craft` MCP server (the URL and the token) into each agent's own user
+settings. An agent counts as installed when its command is on `PATH` or its settings folder
+exists.
+
+| Agent | Where the extension writes the server |
+| --- | --- |
+| Claude Code | `~/.claude.json`, through `claude mcp add --scope user`. The extension also uses the `claude` program inside the Claude Code extension, so a `claude` command on `PATH` is not needed. |
+| Codex | The `[mcp_servers.craft]` table in `~/.codex/config.toml` (or `$CODEX_HOME`). The Codex command and the Codex VS Code extension both read that file. |
+| Gemini CLI | `mcpServers.craft` in `~/.gemini/settings.json`. |
+| VS Code chat | No file: the extension offers the server to VS Code directly (an MCP server definition provider), where the editor supports one. |
+
+An agent that you install later still gets the server. The extension checks again every 5
+minutes, after each command that ends in a terminal, and when you run **Craft: Add the MCP Server
+to Coding Agents**. The extension only writes when an entry is missing or out of date, so an
+entry that is already right stays untouched. The `craft.agents` setting picks the agents. Remove
+an agent from the list, and the extension leaves that agent's settings alone.
+
+A Gemini `settings.json` that contains comments is not plain JSON. The extension doesn't rewrite
+such a file, because the rewrite would drop the comments. Add the server to that file by hand.
+
+## The MCP token
+
+The MCP server listens on `127.0.0.1`, so only programs on the same machine can reach the
+server. Every program on the machine can, though, so each request must carry the header
+`Authorization: Bearer <token>`. Without the token, a request gets the answer `401`.
+
+- If the environment variable `CRAFT_MCP_TOKEN` is set, the extension uses that value. Set the
+  variable when you want to choose the token yourself, for example in a Coder template.
+- Otherwise the extension makes a random token on first start and saves the token in
+  `~/.craft-vscode/mcp-token`. Only your user can read that file. Every editor window on the
+  machine uses the same file, so all windows agree on one token.
+
+The extension also puts `CRAFT_MCP_URL` and `CRAFT_MCP_TOKEN` into the environment of new VS Code
+terminals. A script or an agent that starts in such a terminal can use the two variables. A
+project can then check in a `.mcp.json` that holds no secret:
+
+```json
+{
+  "mcpServers": {
+    "craft": {
+      "type": "http",
+      "url": "${CRAFT_MCP_URL:-http://127.0.0.1:47811/mcp}",
+      "headers": { "Authorization": "Bearer ${CRAFT_MCP_TOKEN}" }
+    }
+  }
+}
+```
+
+You don't need that file for the agents in the table above, because the extension already sets
+them up. **Craft: Copy MCP Server Token** copies the token. **Craft: Make a New MCP Server Token**
+replaces the saved token and gives the new token to the agents. Agent sessions that are running
+at that moment keep the old token, so restart those sessions.
 
 ```
 browser tab (code-server)
@@ -51,36 +107,43 @@ URL, and run **Craft: Set an App's MCP URL by Hand**.
 
 ## Install
 
-The extension isn't on a marketplace yet. Download the `.vsix` from the
-[latest release](https://github.com/hayone1/craft-vscode/releases/latest), then:
+Install **Craft Apps** (`hayone1.craft-vscode`) from the Visual Studio Marketplace in VS Code, or
+from [Open VSX](https://open-vsx.org) in code-server, VSCodium and other editors that use Open
+VSX:
 
 ```sh
-code-server --install-extension craft-vscode-<version>.vsix   # or: code --install-extension …
+code --install-extension hayone1.craft-vscode          # VS Code
+code-server --install-extension hayone1.craft-vscode   # code-server (Open VSX)
 ```
+
+Each [release](https://github.com/hayone1/craft-vscode/releases/latest) also has the `.vsix`
+file, for machines that can't reach either store: `code --install-extension craft-vscode-<version>.vsix`.
 
 Set the hub's address in the `craft.hubUrl` setting, or in the `CRAFT_HUB_URL` environment
 variable of the workspace.
 
 ### Coder
 
-In a template that uses the `code-server` module, install it from the release in the agent's
-startup script and set the hub for the workspace:
+In a template that uses Coder's `code-server` module, add the extension to the module's
+`extensions` list. The module installs extensions from Open VSX. Then set the hub for the
+workspace on the agent:
 
 ```hcl
+module "code-server" {
+  source     = "registry.coder.com/coder/code-server/coder"
+  agent_id   = coder_agent.main.id
+  extensions = ["anthropic.claude-code", "hayone1.craft-vscode"]
+}
+
 resource "coder_agent" "main" {
   env = {
     CRAFT_HUB_URL = "https://craft.example.com"
   }
-  startup_script = <<-EOT
-    v=0.1.0
-    curl -fsSL -o /tmp/craft-vscode.vsix \
-      https://github.com/hayone1/craft-vscode/releases/download/v$v/craft-vscode-$v.vsix
-    # code-server may still be installing; the module puts it in /tmp/code-server.
-    for i in $(seq 60); do [ -x /tmp/code-server/bin/code-server ] && break; sleep 2; done
-    /tmp/code-server/bin/code-server --install-extension /tmp/craft-vscode.vsix --force || true
-  EOT
 }
 ```
+
+The template doesn't need to run `claude mcp add`, because the extension sets up the agents
+itself. To choose the MCP token yourself, also set `CRAFT_MCP_TOKEN` in the agent's `env`.
 
 ## Settings
 
@@ -89,7 +152,7 @@ resource "coder_agent" "main" {
 | `craft.hubUrl` | `CRAFT_HUB_URL` | The hub, e.g. `https://craft.example.com`. |
 | `craft.apps` | `CRAFT_APPS`, else the five apps | The apps, in order. |
 | `craft.mcpPort` | `47811` | The local MCP server's port. |
-| `craft.registerWithClaudeCode` | `true` | Add the server to Claude Code on start. |
+| `craft.agents` | `["claude", "codex", "gemini"]` | The coding agents that get the server. |
 
 ## Notes
 
@@ -116,6 +179,22 @@ npm ci
 npm test          # the MCP bridge against a stand-in relay
 npm run package   # dist/extension.js and craft-vscode-<version>.vsix
 ```
+
+`src/agents.mjs` writes the server into the agents' settings, and `src/token.mjs` finds or makes
+the token. Both run in plain Node too, and the tests use a temporary home folder.
+
+## Release
+
+A tag `v<version>` that matches `version` in `package.json` makes the CI build the `.vsix`,
+create a GitHub release, and publish the same `.vsix` to both stores. The CI skips a store whose
+token secret is missing, so a release without the secrets still lands on GitHub.
+
+| Secret | Store | How to get the token |
+| --- | --- | --- |
+| `VSCE_PAT` | Visual Studio Marketplace | Create the publisher `hayone1` at https://marketplace.visualstudio.com/manage. Then create an Azure DevOps personal access token with the scope **Marketplace › Manage** and the organization **All accessible organizations**. |
+| `OVSX_PAT` | Open VSX | Sign in at https://open-vsx.org with GitHub, link an Eclipse account and sign the publisher agreement, then create an access token in the settings. Before the first release, run `npx ovsx create-namespace hayone1 -p <token>` once. |
+
+Save both tokens under **Settings › Secrets and variables › Actions** in this repository.
 
 `src/bridge.mjs` is the MCP server and its clients (plain Node, tested on its own).
 `src/extension.mjs` is the VS Code side: the panels, the Craft view and the window handover.
