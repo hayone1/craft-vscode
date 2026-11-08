@@ -7,7 +7,7 @@
 //   craft_call   call any tool of an open app (for clients that miss tools/list_changed)
 //
 // No vscode import here, so the tests can run it in plain Node.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 // undici, not the global fetch: VS Code wraps that one for proxies and asks the window to resolve
 // them, so it hangs in an extension host whose browser tab has gone (code-server keeps those).
@@ -20,7 +20,7 @@ import {
   CallToolRequestSchema, ListToolsRequestSchema, ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 // The relay gives a tab 120 s per request; a long tool call can report progress and go on.
 const CALL_TIMEOUT_MS = 10 * 60_000;
 const OPEN_TIMEOUT_MS = 90_000;
@@ -54,10 +54,19 @@ const STATIC = [
 // MCP clients (and the models behind them) accept [A-Za-z0-9_-]{1,64} for tool names.
 const toolName = (app, tool) => `${app}_${tool}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
 const text = (t, isError = false) => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
+// Hashing first gives both sides the same length, which timingSafeEqual needs.
+const digest = (s) => createHash("sha256").update(String(s)).digest();
+const sameToken = (a, b) => timingSafeEqual(digest(a), digest(b));
 
 export class Bridge {
   /**
-   * @param {{ apps: () => {name: string, title: string}[], open: (app: string) => Promise<void> | void, log?: (s: string) => void }} host
+   * @param {{
+   *   apps: () => {name: string, title: string}[],
+   *   open: (app: string) => Promise<void> | void,
+   *   token?: () => string,          the bearer token every request but /healthz must carry; none: no check
+   *   refreshToken?: () => void,     reloads the token (another window may have made a new one)
+   *   log?: (s: string) => void,
+   * }} host
    */
   constructor(host) {
     this.host = host;
@@ -266,6 +275,15 @@ export class Bridge {
   }
 
   // ---- the server -------------------------------------------------------------------------
+  #authorized(req) {
+    if (!this.host.token) return true;
+    const m = /^Bearer\s+(\S+)\s*$/i.exec(req.headers.authorization ?? "");
+    if (!m) return false;
+    if (sameToken(m[1], this.host.token())) return true;
+    this.host.refreshToken?.();
+    return sameToken(m[1], this.host.token());
+  }
+
   #server() {
     const server = new Server({ name: "craft", version: VERSION }, {
       capabilities: { tools: { listChanged: true } },
@@ -290,8 +308,13 @@ export class Bridge {
     this.http = createServer(async (req, res) => {
       try {
         const url = new URL(req.url ?? "/", "http://local");
-        if (url.pathname === "/healthz") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ craft: VERSION }));
+        if (url.pathname === "/healthz") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ craft: VERSION, auth: Boolean(this.host.token) }));
         if (!hosts.includes(req.headers.host ?? "")) return res.writeHead(403).end();
+        // Any process on this machine can reach the port, so every request carries the token.
+        if (!this.#authorized(req)) {
+          return res.writeHead(401, { "content-type": "application/json" })
+            .end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "Missing or wrong bearer token (CRAFT_MCP_TOKEN)" }, id: null }));
+        }
         // Another editor window on this machine reports its panels here (see Follower).
         if (url.pathname === "/tabs" && req.method === "POST" && req.headers["content-type"] === "application/json") {
           let body = "";

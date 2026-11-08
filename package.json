@@ -1,8 +1,8 @@
 {
   "name": "craft-vscode",
   "displayName": "Craft Apps",
-  "description": "Open the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) from craft-ai-hub in editor panels, and let Claude Code drive them over MCP.",
-  "version": "0.1.0",
+  "description": "Open the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) from a craft-ai-hub in editor panels, and let Claude Code, Codex, Gemini CLI or VS Code chat drive them over one local MCP server.",
+  "version": "0.2.0",
   "publisher": "hayone1",
   "license": "MIT",
   "repository": {
@@ -19,6 +19,8 @@
   "keywords": [
     "mcp",
     "claude",
+    "codex",
+    "gemini",
     "craft",
     "photocraft",
     "code-server"
@@ -73,13 +75,23 @@
         "category": "Craft"
       },
       {
+        "command": "craft.copyMcpToken",
+        "title": "Copy MCP Server Token",
+        "category": "Craft"
+      },
+      {
+        "command": "craft.newMcpToken",
+        "title": "Make a New MCP Server Token",
+        "category": "Craft"
+      },
+      {
         "command": "craft.setMcpUrl",
         "title": "Set an App's MCP URL by Hand",
         "category": "Craft"
       },
       {
-        "command": "craft.registerClaudeCode",
-        "title": "Add the MCP Server to Claude Code",
+        "command": "craft.registerAgents",
+        "title": "Add the MCP Server to Coding Agents",
         "category": "Craft"
       }
     ],
@@ -120,10 +132,34 @@
           "default": 47811,
           "description": "The local port of the MCP server (http://127.0.0.1:<port>/mcp)."
         },
+        "craft.agents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex",
+              "gemini"
+            ],
+            "enumDescriptions": [
+              "Claude Code (~/.claude.json, through the claude CLI)",
+              "Codex (~/.codex/config.toml; the Codex CLI and the Codex extension)",
+              "Gemini CLI (~/.gemini/settings.json)"
+            ]
+          },
+          "uniqueItems": true,
+          "default": [
+            "claude",
+            "codex",
+            "gemini"
+          ],
+          "markdownDescription": "The coding agents that get the `craft` MCP server (URL and token) in their user settings. An agent installed later is set up within 5 minutes, or at once with **Craft: Add the MCP Server to Coding Agents**. Remove an agent to leave its settings alone."
+        },
         "craft.registerWithClaudeCode": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Add the MCP server to Claude Code (`claude mcp add --scope user craft …`) when the extension starts."
+          "markdownDescription": "Deprecated: use `craft.agents`. `false` leaves Claude Code alone.",
+          "markdownDeprecationMessage": "Use `craft.agents` (remove `claude` from it)."
         }
       }
     },
@@ -145,6 +181,17 @@
   },
   "devDependencies": {
     "@vscode/vsce": "4.1.0",
-    "esbuild": "0.28.2"
-  }
+    "esbuild": "0.28.2",
+    "ovsx": "1.3.0"
+  },
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1c1c1c",
+    "theme": "dark"
+  },
+  "homepage": "https://github.com/hayone1/craft-vscode#readme",
+  "bugs": {
+    "url": "https://github.com/hayone1/craft-vscode/issues"
+  },
+  "pricing": "Free"
 }

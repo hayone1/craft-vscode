@@ -4,14 +4,13 @@
 //
 // The panel learns its tab's MCP URL from the hub's overlay (EMBED_ORIGINS on the hub): the
 // webview says "craft-embed:hello" to the framed page, the overlay answers "craft-hub:session".
-import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import { fetch as httpFetch } from "undici";
+import { AGENTS, syncAgents } from "./agents.mjs";
 import { Bridge } from "./bridge.mjs";
+import { resolveToken, rotateToken, tokenFile } from "./token.mjs";
 
 const CATALOG = {
   photocraft: "PhotoCraft", vectorcraft: "VectorCraft", lightcraft: "LightCraft", filmcraft: "FilmCraft",
@@ -41,11 +40,38 @@ const local = new Map();
 let bridge;
 let follower; // set when another window serves the MCP port
 let changed;
+let definitionsChanged; // VS Code's own MCP list: the token changed
+let terminalEnv;
+
+// ---- the MCP token: CRAFT_MCP_TOKEN, else ~/.craft-vscode/mcp-token (made on first start) ----
+let auth;
+function loadToken() {
+  const before = auth?.token;
+  try {
+    auth = resolveToken();
+    if (before && before !== auth.token) definitionsChanged?.fire();
+  } catch (e) {
+    // A home folder we can't write: keep a token for this window only.
+    auth ??= { token: randomBytes(32).toString("base64url"), source: "memory" };
+    log?.warn(`MCP token: couldn't use ${tokenFile()}: ${e.message}`);
+  }
+  terminalEnv?.replace("CRAFT_MCP_TOKEN", auth.token);
+  return auth.token;
+}
+const token = () => auth?.token ?? loadToken();
+const authHeader = () => ({ authorization: `Bearer ${token()}` });
 
 export async function activate(context) {
   log = vscode.window.createOutputChannel("Craft apps", { log: true });
   changed = new vscode.EventEmitter();
-  context.subscriptions.push(log, changed);
+  definitionsChanged = new vscode.EventEmitter();
+  context.subscriptions.push(log, changed, definitionsChanged);
+  // Terminals get the URL and token, so a script or an agent started there can reach the server.
+  terminalEnv = context.environmentVariableCollection;
+  terminalEnv.description = "The Craft apps MCP server (CRAFT_MCP_URL, CRAFT_MCP_TOKEN)";
+  terminalEnv.persistent = false; // set again at each start; keeps the token out of VS Code's saved state
+  loadToken();
+  terminalEnv.replace("CRAFT_MCP_URL", mcpUrl());
 
   const tree = { onDidChangeTreeData: changed.event, getTreeItem: (a) => item(a), getChildren: () => apps() };
   context.subscriptions.push(vscode.window.registerTreeDataProvider("craft.apps", tree));
@@ -70,8 +96,15 @@ export async function activate(context) {
       await vscode.env.clipboard.writeText(mcpUrl());
       vscode.window.showInformationMessage(`Copied ${mcpUrl()}`);
     }),
+    vscode.commands.registerCommand("craft.copyMcpToken", async () => {
+      await vscode.env.clipboard.writeText(token());
+      vscode.window.showInformationMessage("Copied the MCP token. Send it as the header \"Authorization: Bearer <token>\".");
+    }),
+    vscode.commands.registerCommand("craft.newMcpToken", newToken),
     vscode.commands.registerCommand("craft.setMcpUrl", setMcpUrl),
-    vscode.commands.registerCommand("craft.registerClaudeCode", () => registerClaudeCode(true)),
+    vscode.commands.registerCommand("craft.registerAgents", () => registerAgents({ asked: true })),
+    // The 0.1 name of the command above.
+    vscode.commands.registerCommand("craft.registerClaudeCode", () => registerAgents({ asked: true })),
     vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
       deserializeWebviewPanel: async (panel, state) => {
         const app = state?.app;
@@ -84,10 +117,11 @@ export async function activate(context) {
   await serve(context);
   if (vscode.lm?.registerMcpServerDefinitionProvider && vscode.McpHttpServerDefinition) {
     context.subscriptions.push(vscode.lm.registerMcpServerDefinitionProvider("craft.mcp", {
-      provideMcpServerDefinitions: () => [new vscode.McpHttpServerDefinition("Craft apps", vscode.Uri.parse(mcpUrl()))],
+      onDidChangeMcpServerDefinitions: definitionsChanged.event,
+      provideMcpServerDefinitions: () => [new vscode.McpHttpServerDefinition("Craft apps", vscode.Uri.parse(mcpUrl()), { Authorization: `Bearer ${token()}` })],
     }));
   }
-  if (settings().get("registerWithClaudeCode", true)) registerClaudeCode(false);
+  watchAgents(context);
   changed.fire();
 }
 
@@ -113,7 +147,7 @@ async function serve(context) {
     focusedAt = Date.now();
     if (follower) report();
   }));
-  bridge = new Bridge({ apps, open: route, log: (s) => log.info(s) });
+  bridge = new Bridge({ apps, open: route, token, refreshToken: loadToken, log: (s) => log.info(s) });
   context.subscriptions.push({ dispose: () => bridge.close() });
   try {
     await bridge.listen(port());
@@ -147,11 +181,13 @@ async function route(app) {
 
 async function report() {
   if (!follower) return;
-  const sent = await httpFetch(`http://127.0.0.1:${port()}/tabs`, {
-    method: "POST", headers: { "content-type": "application/json" },
+  const status = await httpFetch(`http://127.0.0.1:${port()}/tabs`, {
+    method: "POST", headers: { "content-type": "application/json", ...authHeader() },
     body: JSON.stringify({ window: follower.id, focusedAt, tabs: Object.fromEntries(local) }),
-  }).then((r) => r.ok, () => false);
-  if (sent) return;
+  }).then((r) => r.status, () => 0);
+  if (status >= 200 && status < 300) return;
+  // Another window made a new token: read it again, and report again on the next round.
+  if (status === 401) return void loadToken();
   try {
     await bridge.listen(port());
     clearInterval(follower.timer);
@@ -159,13 +195,16 @@ async function report() {
     log.info(`MCP server at ${mcpUrl()} (took over)`);
     for (const [app, tab] of local) bridge.update(app, tab);
     changed.fire();
+    registerAgents({});
   } catch {}
 }
 
 // A follower's commands from the window that holds the port.
 async function poll(me) {
   while (follower === me) {
-    const commands = await httpFetch(`http://127.0.0.1:${port()}/commands?window=${me.id}`).then((r) => (r.ok ? r.json() : []), () => null);
+    const commands = await httpFetch(`http://127.0.0.1:${port()}/commands?window=${me.id}`, { headers: authHeader() })
+      // Not answered (a new token, or the server doesn't know this window yet): wait, then ask again.
+      .then((r) => (r.ok ? r.json() : (r.status === 401 && loadToken(), null)), () => null);
     if (commands === null) await new Promise((r) => setTimeout(r, 5000));
     for (const c of commands ?? []) if (c?.type === "open" && typeof c.app === "string") open(c.app, true);
   }
@@ -180,32 +219,76 @@ function tabChanged(app, tab) {
   changed.fire();
 }
 
-// Claude Code reads user-scope MCP servers from ~/.claude.json; add ours there once.
-async function registerClaudeCode(asked) {
-  const run = (bin, args) => new Promise((resolve) => execFile(bin, args, { shell: process.platform === "win32", timeout: 30_000 },
-    (e, stdout, stderr) => resolve({ ok: !e, out: `${stdout}${stderr}`.trim() })));
-  const bins = ["claude", join(homedir(), ".local", "bin", "claude")];
-  let bin;
-  for (const b of bins) if ((await run(b, ["--version"])).ok) { bin = b; break; }
-  if (!bin) {
-    if (asked) vscode.window.showWarningMessage("Craft apps: the Claude Code CLI (claude) isn't installed here.");
+// ---- coding agents (agents.mjs) ---------------------------------------------------------------
+// The window that serves the port keeps each agent's "craft" entry up to date: at start, every
+// few minutes and after a terminal command (an agent installed later is picked up), and when the
+// settings or the token change. Entries that are already right are left alone.
+const enabledAgents = () => {
+  const list = settings().get("agents");
+  const ids = Array.isArray(list) ? list.map(String) : AGENTS.map((a) => a.id);
+  return settings().get("registerWithClaudeCode", true) ? ids : ids.filter((id) => id !== "claude");
+};
+// The Claude Code extension ships its own CLI, so Claude can be set up without one on PATH.
+const bundledClaude = () => {
+  const dir = vscode.extensions.getExtension("anthropic.claude-code")?.extensionPath;
+  return dir ? [join(dir, "resources", "native-binary", process.platform === "win32" ? "claude.exe" : "claude")] : [];
+};
+
+let syncing = null;
+const warned = new Set();
+async function registerAgents({ asked = false, anyWindow = asked }) {
+  if (follower && !anyWindow) return; // the window that serves the port does this
+  if (!follower && !bridge?.http?.listening) return; // the port belongs to something else
+  if (syncing) await syncing.catch(() => {});
+  loadToken(); // another window may have made a new token
+  syncing = syncAgents({ url: mcpUrl(), token: token(), name: SERVER, enabled: enabledAgents(), extraBins: { claude: bundledClaude() } });
+  let results;
+  try { results = await syncing; } finally { syncing = null; }
+  for (const r of results) {
+    if (r.state === "added" || r.state === "updated") {
+      log.info(`${r.label}: ${r.state} the ${SERVER} MCP server (${r.detail})`);
+      vscode.window.showInformationMessage(`Craft apps: ${r.label} now has the ${SERVER} MCP server. Start a new ${r.label} session to use it.`);
+    } else if (r.state === "failed") {
+      log.warn(`${r.label}: ${r.detail}`);
+      if (asked || !warned.has(r.id)) vscode.window.showWarningMessage(`Craft apps: couldn't add the MCP server to ${r.label}: ${r.detail}`);
+      warned.add(r.id);
+    }
+  }
+  if (asked) {
+    const word = { ok: "set up", added: "added", updated: "updated", failed: "failed", missing: "not installed", off: "turned off in craft.agents" };
+    vscode.window.showInformationMessage(`Craft apps MCP server: ${results.map((r) => `${r.label} ${word[r.state]}`).join(", ")}.`);
+  }
+}
+
+function watchAgents(context) {
+  let timer;
+  const soon = (ms = 3000) => { clearTimeout(timer); timer = setTimeout(() => registerAgents({}), ms); };
+  const every = setInterval(() => registerAgents({}), 5 * 60_000);
+  context.subscriptions.push({ dispose: () => { clearTimeout(timer); clearInterval(every); } });
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration("craft.agents") || e.affectsConfiguration("craft.registerWithClaudeCode")) soon(500);
+  }));
+  // npm i -g @openai/codex, curl … | sh, and the like: look again once a terminal command ends.
+  if (vscode.window.onDidEndTerminalShellExecution) context.subscriptions.push(vscode.window.onDidEndTerminalShellExecution(() => soon()));
+  context.subscriptions.push(vscode.window.onDidCloseTerminal(() => soon()));
+  registerAgents({});
+}
+
+async function newToken() {
+  if (auth?.source === "env") {
+    vscode.window.showInformationMessage("Craft apps: the MCP token comes from CRAFT_MCP_TOKEN. Change it there and restart the editor.");
     return;
   }
   try {
-    const config = JSON.parse(readFileSync(join(homedir(), ".claude.json"), "utf8"));
-    if (config.mcpServers?.[SERVER]?.url === mcpUrl()) {
-      if (asked) vscode.window.showInformationMessage(`Claude Code already has the ${SERVER} MCP server.`);
-      return;
-    }
-    if (config.mcpServers?.[SERVER]) await run(bin, ["mcp", "remove", SERVER, "--scope", "user"]);
-  } catch {}
-  const added = await run(bin, ["mcp", "add", "--transport", "http", "--scope", "user", SERVER, mcpUrl()]);
-  log.info(`claude mcp add ${SERVER}: ${added.out}`);
-  if (asked || !added.ok) {
-    vscode.window[added.ok ? "showInformationMessage" : "showWarningMessage"](added.ok
-      ? `Claude Code now has the ${SERVER} MCP server. Start a new Claude conversation to use it.`
-      : `Craft apps: couldn't add the MCP server to Claude Code: ${added.out}`);
+    auth = rotateToken();
+  } catch (e) {
+    vscode.window.showErrorMessage(`Craft apps: couldn't save a new token in ${tokenFile()}: ${e.message}`);
+    return;
   }
+  terminalEnv.replace("CRAFT_MCP_TOKEN", auth.token);
+  definitionsChanged.fire();
+  await registerAgents({ anyWindow: true });
+  vscode.window.showInformationMessage("Craft apps: made a new MCP token and gave it to the coding agents. Restart agent sessions that are running now.");
 }
 
 // ---- panels -------------------------------------------------------------------------------
@@ -268,7 +351,7 @@ async function setMcpUrl() {
   const app = activeApp() ?? (await pick());
   if (!app) return;
   const url = await vscode.window.showInputBox({
-    prompt: `${titleOf(app)}'s MCP URL, from the Connect tab of the app's Ask AI panel`, ignoreFocusOut: true,
+    prompt: `${titleOf(app)}'s MCP URL, from the Connect tab of the app's AI chat (the round ✦ button)`, ignoreFocusOut: true,
     validateInput: (v) => (/^https?:\/\/.+\/mcp$/.test(v.trim()) ? null : "A URL that ends in /mcp"),
   });
   if (url) tabChanged(app, { mcp: url.trim(), state: "on", title: titleOf(app) });
