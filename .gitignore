@@ -3,3 +3,4 @@ dist/
 *.vsix
 .env
 HANDOFF*.md
+.recordings/
