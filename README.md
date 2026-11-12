@@ -105,6 +105,52 @@ EMBED_ORIGINS=https://*.code.example.com
 A hub without `EMBED_ORIGINS` still works: open the app's AI chat (the round ✦ button) › **Connect** tab, copy the
 URL, and run **Craft: Set an App's MCP URL by Hand**.
 
+## Workspace files
+
+The apps can open and save files in your workspace folders. The extension lends the folders to
+the app page, and the page shows them in two places:
+
+- **File › Open and Save.** The apps' file dialog lists a **VS Code** place next to the hub's
+  cloud folders. A document that you open from the workspace keeps its place, so **Save** writes
+  the file back without a dialog. The new file shows up in the explorer right away. Inside the
+  app, the path of such a file looks like `cloud:workspace/assets/logo.png`.
+- **Drag and drop.** Hold **Shift** and drag a file from the explorer onto an app panel. VS Code
+  needs the Shift key to drop into a panel. The app gets the file as if you had dropped it from
+  your desktop.
+
+Lending the folders means trusting the hub and the apps with them. With the default setting, the
+app page can overwrite any file that the rules below don't protect, for example `package.json` or
+a source file. The hub's AI assistant drives the apps, so a bad instruction to the assistant could
+lead to such a save. Use `"readOnly"` if the apps should only open files from the workspace.
+
+These rules always hold:
+
+- The page only reaches files inside the workspace folders. A symbolic link that points out of a
+  folder is refused.
+- Hidden files and folders, whose names start with a dot (`.git`, `.vscode`, `.env`), are never
+  listed, read or written. A page could otherwise change your settings, your tasks or your git
+  history. The extension checks the real path on disk, so a link to a hidden folder or a Windows
+  short name such as `GIT~1` doesn't get around the rule.
+- The page can read files in `node_modules`, but it can't write there. A changed package would
+  run the next time a tool loads it.
+- A file can have at most 200 MB, and one drop at most 50 files.
+
+The setting `craft.workspaceFiles` picks what the apps may do:
+
+| Value | What the apps may do |
+| --- | --- |
+| `"readWrite"` (default) | Open files from the workspace folders, and save files into them. |
+| `"readOnly"` | Open files from the workspace folders. The dialog shows the place as read-only. |
+| `"off"` | Nothing. The dialog doesn't show the place. |
+
+A change to the setting takes effect at once in every open panel. Nothing is lent while the
+workspace is in Restricted Mode.
+
+The hub's overlay passes the requests between the app and the extension, and only for an editor
+on an `EMBED_ORIGINS` origin. The feature needs a craft-ai-hub and app images from November 2026
+or later. File › Open and Save use the cloud storage hook, which PhotoCraft and VectorCraft have
+today. Drag and drop works in every app that accepts dropped files.
+
 ## Install
 
 Install **Craft Apps** (`hayone1.craft-vscode`) from the Visual Studio Marketplace in VS Code, or
@@ -153,6 +199,7 @@ itself. To choose the MCP token yourself, also set `CRAFT_MCP_TOKEN` in the agen
 | `craft.apps` | `CRAFT_APPS`, else the five apps | The apps, in order. |
 | `craft.mcpPort` | `47811` | The local MCP server's port. |
 | `craft.agents` | `["claude", "codex", "gemini"]` | The coding agents that get the server. |
+| `craft.workspaceFiles` | `"readWrite"` | What the app panels may do with the workspace folders: `"readWrite"`, `"readOnly"` or `"off"` (see "Workspace files"). |
 
 ## Notes
 
@@ -181,7 +228,8 @@ npm run package   # dist/extension.js and craft-vscode-<version>.vsix
 ```
 
 `src/agents.mjs` writes the server into the agents' settings, and `src/token.mjs` finds or makes
-the token. Both run in plain Node too, and the tests use a temporary home folder.
+the token. `src/files.mjs` answers the app pages' file requests. All three run in plain Node too,
+and the tests use temporary folders.
 
 ## Release
 
