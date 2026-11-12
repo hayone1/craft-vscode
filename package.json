@@ -2,7 +2,7 @@
   "name": "craft-vscode",
   "displayName": "Craft Apps",
   "description": "Open the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) from a craft-ai-hub in editor panels, and let Claude Code, Codex, Gemini CLI or VS Code chat drive them over one local MCP server.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "hayone1",
   "license": "MIT",
   "repository": {
@@ -160,6 +160,28 @@
           "default": true,
           "markdownDescription": "Deprecated: use `craft.agents`. `false` leaves Claude Code alone.",
           "markdownDeprecationMessage": "Use `craft.agents` (remove `claude` from it)."
+        },
+        "craft.workspaceFiles": {
+          "type": [
+            "string",
+            "boolean"
+          ],
+          "enum": [
+            "readWrite",
+            "readOnly",
+            "off",
+            true,
+            false
+          ],
+          "enumDescriptions": [
+            "The apps can open files from the workspace folders and save files into them.",
+            "The apps can open files from the workspace folders, but not save into them.",
+            "The apps get no access to the workspace.",
+            "The same as readWrite.",
+            "The same as off."
+          ],
+          "default": "readWrite",
+          "markdownDescription": "What the app panels may do with the workspace folders: list them in the apps' **File › Open** and **Save** dialogs, and open files dragged from the explorer (hold Shift). Hidden files and folders (`.git`, `.vscode`, `.env`) stay off limits, and `node_modules` is never written. A change takes effect at once in every open panel."
         }
       }
     },

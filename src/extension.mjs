@@ -4,12 +4,15 @@
 //
 // The panel learns its tab's MCP URL from the hub's overlay (EMBED_ORIGINS on the hub): the
 // webview says "craft-embed:hello" to the framed page, the overlay answers "craft-hub:session".
+// The hello also lends the workspace's files to the page (files.mjs): the overlay asks with
+// "craft-embed:files", the webview passes each request here and the answer back.
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import { fetch as httpFetch } from "undici";
 import { AGENTS, syncAgents } from "./agents.mjs";
 import { Bridge } from "./bridge.mjs";
+import { realWhere, workspaceFiles } from "./files.mjs";
 import { resolveToken, rotateToken, tokenFile } from "./token.mjs";
 
 const CATALOG = {
@@ -122,6 +125,11 @@ export async function activate(context) {
     }));
   }
   watchAgents(context);
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration("craft.workspaceFiles") && lendAgain()),
+    vscode.workspace.onDidGrantWorkspaceTrust(lendAgain),
+    vscode.workspace.onDidChangeWorkspaceFolders(lendAgain),
+  );
   changed.fire();
 }
 
@@ -320,7 +328,13 @@ function setup(panel, app) {
   panel.iconPath = vscode.Uri.joinPath(vscode.extensions.getExtension("hayone1.craft-vscode").extensionUri, "media", "app.svg");
   panel.webview.options = { enableScripts: true };
   panel.webview.html = page(app);
-  panel.webview.onDidReceiveMessage((m) => {
+  panel.webview.onDidReceiveMessage(async (m) => {
+    if (m?.type === "craft-embed:files") {
+      const reply = await files(m);
+      if (!reply.ok) log.warn(`${app}: ${m.op} ${typeof m.path === "string" ? m.path : ""}: ${reply.error}`);
+      try { await panel.webview.postMessage(reply); } catch {} // the panel closed meanwhile
+      return;
+    }
     if (m?.type === "craft-hub:session") {
       const tab = typeof m.mcp === "string" && /^https:\/\/|^http:\/\//.test(m.mcp)
         ? { mcp: m.mcp, state: String(m.state ?? "off"), title: String(m.title ?? titleOf(app)) } : null;
@@ -370,6 +384,7 @@ function item(a) {
 
 function page(app) {
   const hub = new URL(hubUrl());
+  const lend = lending();
   const src = new URL(`${hub.pathname.replace(/\/$/, "")}/${app}/`, hub).href;
   const nonce = randomBytes(16).toString("base64");
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -397,7 +412,9 @@ function page(app) {
   const frame = document.getElementById("app");
   const note = document.getElementById("note");
   let heard = false, loop, waited = 0;
-  const hello = () => frame.contentWindow && frame.contentWindow.postMessage({ type: "craft-embed:hello" }, HUB);
+  let FILES = ${JSON.stringify(lend).replace(/</g, "\\u003c")};
+  let hubFiles = true; // the hub can turn the lending off (EMBED_FILES=false)
+  const hello = () => frame.contentWindow && frame.contentWindow.postMessage({ type: "craft-embed:hello", files: FILES }, HUB);
   frame.addEventListener("load", () => {
     heard = false; waited = 0; clearInterval(loop); hello();
     loop = setInterval(() => {
@@ -408,9 +425,16 @@ function page(app) {
   });
   window.addEventListener("message", (e) => {
     if (e.source === frame.contentWindow) {
-      if (e.origin !== HUB || !e.data || e.data.type !== "craft-hub:session") return;
+      if (e.origin !== HUB || !e.data) return;
+      if (e.data.type === "craft-embed:files" && FILES && hubFiles) return vscode.postMessage(e.data);
+      if (e.data.type !== "craft-hub:session") return;
       heard = true; note.hidden = true;
+      hubFiles = e.data.files !== false;
       vscode.postMessage(e.data);
+    } else if (e.data && e.data.type === "craft-embed:files-reply") {
+      frame.contentWindow && frame.contentWindow.postMessage(e.data, HUB);
+    } else if (e.data && e.data.type === "craft-embed:lend") {
+      FILES = e.data.files; hello();
     } else if (e.data && e.data.type === "reload") {
       frame.src = frame.src;
     }
@@ -421,3 +445,60 @@ function page(app) {
 </script>
 </body></html>`;
 }
+
+// ---- workspace files for the app pages (files.mjs) --------------------------------------------
+// What the hello offers the page, and a fresh hello to open panels when the setting changes.
+const lending = () => (filesMode() === "off" ? null
+  : { label: "VS Code", name: vscode.workspace.name || "Workspace", readOnly: filesMode() === "readOnly" });
+function lendAgain() {
+  for (const p of panels.values()) p.webview.postMessage({ type: "craft-embed:lend", files: lending() }).then(undefined, () => {});
+}
+
+// craft.workspaceFiles: "readWrite" (default), "readOnly" or "off"; true and false still work.
+function filesMode() {
+  if (vscode.workspace.isTrusted === false) return "off";
+  const v = settings().get("workspaceFiles");
+  return v === false || v === "off" ? "off" : v === "readOnly" ? "readOnly" : "readWrite";
+}
+
+const kindOf = (t) => (t & vscode.FileType.Directory ? "dir" : t & vscode.FileType.File ? "file" : "other");
+const samePath = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+const files = workspaceFiles({
+  folders: () => (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, uri: f.uri })),
+  mode: filesMode,
+  fs: {
+    join: (uri, ...p) => vscode.Uri.joinPath(uri, ...p),
+    stat: async (uri) => {
+      try {
+        const s = await vscode.workspace.fs.stat(uri);
+        return { type: kindOf(s.type), size: s.size, mtime: s.mtime };
+      } catch (e) {
+        if (e?.code === "FileNotFound" || e?.code === "EntryNotFound") return null;
+        throw e;
+      }
+    },
+    list: async (uri) => (await vscode.workspace.fs.readDirectory(uri)).map(([n, t]) => [n, kindOf(t)]),
+    read: (uri) => vscode.workspace.fs.readFile(uri),
+    write: (uri, bytes) => vscode.workspace.fs.writeFile(uri, bytes),
+    mkdir: (uri) => vscode.workspace.fs.createDirectory(uri),
+    // On a local disk, resolve links and short names; elsewhere the checked parts already keep
+    // the path inside and visible.
+    where: async (root, uri) => (await realWhere(root.fsPath, uri.fsPath)) ?? "inside",
+    // A dropped URI: under which folder, and the parts below it. The UI may name a file with
+    // another scheme than this extension host does (vscode-remote:// against file://), so the
+    // paths are compared when the scheme differs.
+    locate: (text) => {
+      let uri;
+      try { uri = vscode.Uri.parse(text, true); } catch { return null; }
+      const list = vscode.workspace.workspaceFolders ?? [];
+      const exact = vscode.workspace.getWorkspaceFolder(uri);
+      for (const f of exact ? [exact] : list) {
+        if (!exact && !(uri.scheme === "vscode-remote" || uri.scheme === "file")) break;
+        const base = f.uri.path.replace(/\/+$/, "");
+        if (!samePath(uri.path.slice(0, base.length), base) || (uri.path.length > base.length && uri.path[base.length] !== "/")) continue;
+        return { folder: f.index, parts: uri.path.slice(base.length).split("/").filter(Boolean) };
+      }
+      return null;
+    },
+  },
+});
