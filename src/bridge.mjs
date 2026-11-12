@@ -20,7 +20,7 @@ import {
   CallToolRequestSchema, ListToolsRequestSchema, ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 // The relay gives a tab 120 s per request; a long tool call can report progress and go on.
 const CALL_TIMEOUT_MS = 10 * 60_000;
 const OPEN_TIMEOUT_MS = 90_000;

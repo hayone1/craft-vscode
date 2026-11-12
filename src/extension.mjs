@@ -330,9 +330,9 @@ function setup(panel, app) {
   panel.webview.html = page(app);
   panel.webview.onDidReceiveMessage(async (m) => {
     if (m?.type === "craft-embed:files") {
-      const reply = await files(m);
+      const reply = await files(unpackBytes(m));
       if (!reply.ok) log.warn(`${app}: ${m.op} ${typeof m.path === "string" ? m.path : ""}: ${reply.error}`);
-      try { await panel.webview.postMessage(reply); } catch {} // the panel closed meanwhile
+      try { await panel.webview.postMessage(packBytes(reply)); } catch {} // the panel closed meanwhile
       return;
     }
     if (m?.type === "craft-hub:session") {
@@ -414,6 +414,30 @@ function page(app) {
   let heard = false, loop, waited = 0;
   let FILES = ${JSON.stringify(lend).replace(/</g, "\\u003c")};
   let hubFiles = true; // the hub can turn the lending off (EMBED_FILES=false)
+  // File bytes cross to the extension as base64: some hosts (code-server) send messages as JSON,
+  // which would turn bytes into long lists of numbers or a Node Buffer's JSON form.
+  const pack = (v) => {
+    if (v instanceof ArrayBuffer) v = new Uint8Array(v);
+    if (ArrayBuffer.isView(v)) {
+      const b = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+      let s = "";
+      for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+      return { __b64: btoa(s) };
+    }
+    if (Array.isArray(v)) return v.map(pack);
+    if (v && typeof v === "object") { const o = {}; for (const k of Object.keys(v)) o[k] = pack(v[k]); return o; }
+    return v;
+  };
+  const unpack = (v) => {
+    if (v && typeof v === "object" && typeof v.__b64 === "string") {
+      const s = atob(v.__b64), b = new Uint8Array(s.length);
+      for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
+      return b;
+    }
+    if (Array.isArray(v)) return v.map(unpack);
+    if (v && typeof v === "object") { const o = {}; for (const k of Object.keys(v)) o[k] = unpack(v[k]); return o; }
+    return v;
+  };
   const hello = () => frame.contentWindow && frame.contentWindow.postMessage({ type: "craft-embed:hello", files: FILES }, HUB);
   frame.addEventListener("load", () => {
     heard = false; waited = 0; clearInterval(loop); hello();
@@ -426,13 +450,13 @@ function page(app) {
   window.addEventListener("message", (e) => {
     if (e.source === frame.contentWindow) {
       if (e.origin !== HUB || !e.data) return;
-      if (e.data.type === "craft-embed:files" && FILES && hubFiles) return vscode.postMessage(e.data);
+      if (e.data.type === "craft-embed:files" && FILES && hubFiles) return vscode.postMessage(pack(e.data));
       if (e.data.type !== "craft-hub:session") return;
       heard = true; note.hidden = true;
       hubFiles = e.data.files !== false;
       vscode.postMessage(e.data);
     } else if (e.data && e.data.type === "craft-embed:files-reply") {
-      frame.contentWindow && frame.contentWindow.postMessage(e.data, HUB);
+      frame.contentWindow && frame.contentWindow.postMessage(unpack(e.data), HUB);
     } else if (e.data && e.data.type === "craft-embed:lend") {
       FILES = e.data.files; hello();
     } else if (e.data && e.data.type === "reload") {
@@ -447,6 +471,20 @@ function page(app) {
 }
 
 // ---- workspace files for the app pages (files.mjs) --------------------------------------------
+// The webview and the extension swap file bytes as {__b64} (see pack/unpack in the page): some
+// hosts send webview messages as JSON, where bytes would arrive as a Node Buffer's JSON form.
+function packBytes(v) {
+  if (v instanceof Uint8Array) return { __b64: Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString("base64") };
+  if (Array.isArray(v)) return v.map(packBytes);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, packBytes(x)]));
+  return v;
+}
+function unpackBytes(v) {
+  if (v && typeof v === "object" && typeof v.__b64 === "string") { const b = Buffer.from(v.__b64, "base64"); return new Uint8Array(b.buffer, b.byteOffset, b.byteLength); }
+  if (Array.isArray(v)) return v.map(unpackBytes);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, unpackBytes(x)]));
+  return v;
+}
 // What the hello offers the page, and a fresh hello to open panels when the setting changes.
 const lending = () => (filesMode() === "off" ? null
   : { label: "VS Code", name: vscode.workspace.name || "Workspace", readOnly: filesMode() === "readOnly" });
