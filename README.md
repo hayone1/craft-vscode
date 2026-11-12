@@ -6,8 +6,9 @@ agent can be Claude Code, Codex, Gemini CLI or the chat that is built into VS Co
 code-server you can do all of it in one browser tab, on an iPad too: the app runs in a panel, and
 Claude works in it from the panel next to it while you watch.
 
-The apps come from a [craft-ai-hub](https://github.com/hayone1/craft-ai-hub), so they keep the
-hub's sign-in, cloud storage and AI chat (the round ✦ button). This extension adds:
+The apps come from a [craft-gateway](https://github.com/hayone1/craft-gateway), formerly
+craft-ai-hub, which this README calls "the hub". The apps keep the hub's sign-in, cloud storage and
+AI chat (the round ✦ button). This extension adds:
 
 - **A Craft view** in the activity bar that lists the apps. Click one to open it in an editor
   panel. Panels keep running when you switch tabs, and come back after a reload.
@@ -147,7 +148,7 @@ A change to the setting takes effect at once in every open panel. Nothing is len
 workspace is in Restricted Mode.
 
 The hub's overlay passes the requests between the app and the extension, and only for an editor
-on an `EMBED_ORIGINS` origin. The feature needs a craft-ai-hub and app images from November 2026
+on an `EMBED_ORIGINS` origin. The feature needs a craft-gateway and app images from November 2026
 or later. File › Open and Save use the cloud storage hook, which PhotoCraft and VectorCraft have
 today. Drag and drop works in every app that accepts dropped files.
 
@@ -243,10 +244,12 @@ create a GitHub release, and publish the same `.vsix` to both stores.
   token for a Marketplace credential that lasts 15 minutes. Azure DevOps personal access tokens
   that cover all organizations stop working on December 1, 2026, which is why the CI doesn't use
   one.
-- **Open VSX.** The CI uses the secret `OVSX_PAT`, and skips Open VSX when the secret is missing.
-  To get the token, sign in at https://open-vsx.org with GitHub, link an Eclipse account, sign
-  the publisher agreement, and create an access token in the settings. Before the first release,
-  run `npx ovsx create-namespace hayone1 -p <token>` once.
+- **Open VSX.** The CI uses Trusted Publishing here too: `ovsx publish --trusted-publishing`
+  trades the run's GitHub OIDC token for an Open VSX token that lasts about 5 minutes. The
+  namespace `hayone1` has a trusted publisher for the owner `hayone1`, the repository
+  `craft-vscode` and the workflow `ci.yml`, with no environment. Open VSX only trusts a workflow
+  for an extension that already has a version, so the first version went up once with an access
+  token. If the repository has the secret `OVSX_PAT`, the CI uses that token instead.
 
 `src/bridge.mjs` is the MCP server and its clients (plain Node, tested on its own).
 `src/extension.mjs` is the VS Code side: the panels, the Craft view and the window handover.
