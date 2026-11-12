@@ -2,7 +2,7 @@
   "name": "craft-vscode",
   "displayName": "Craft Apps",
   "description": "Open the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) from a craft-web-gateway in editor panels, and let Claude Code, Codex, Gemini CLI or VS Code chat drive them over one local MCP server.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "hayone1",
   "license": "MIT",
   "repository": {
@@ -49,6 +49,13 @@
           "id": "craft.apps",
           "name": "Apps"
         }
+      ],
+      "explorer": [
+        {
+          "id": "craft.appsExplorer",
+          "name": "Craft Apps",
+          "visibility": "collapsed"
+        }
       ]
     },
     "commands": [
@@ -93,13 +100,18 @@
         "command": "craft.registerAgents",
         "title": "Add the MCP Server to Coding Agents",
         "category": "Craft"
+      },
+      {
+        "command": "craft.openInApp",
+        "title": "Open in a Craft App",
+        "category": "Craft"
       }
     ],
     "menus": {
       "view/title": [
         {
           "command": "craft.open",
-          "when": "view == craft.apps",
+          "when": "view == craft.apps || view == craft.appsExplorer",
           "group": "navigation"
         }
       ],
@@ -108,6 +120,19 @@
           "command": "craft.reload",
           "when": "activeWebviewPanelId == craft.app",
           "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "craft.openInApp",
+          "when": "!explorerResourceIsFolder",
+          "group": "navigation@90"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "craft.openInApp",
+          "when": "false"
         }
       ]
     },

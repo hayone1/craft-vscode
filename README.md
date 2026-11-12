@@ -115,9 +115,17 @@ the app page, and the page shows them in two places:
   cloud folders. A document that you open from the workspace keeps its place, so **Save** writes
   the file back without a dialog. The new file shows up in the explorer right away. Inside the
   app, the path of such a file looks like `cloud:workspace/assets/logo.png`.
-- **Drag and drop.** Hold **Shift** and drag a file from the explorer onto an app panel. VS Code
-  needs the Shift key to drop into a panel. The app gets the file as if you had dropped it from
-  your desktop.
+- **Drag a file onto an app.** Drag a file from the explorer onto an app's name in the **Craft
+  Apps** list. The list is a section at the bottom of the Explorer, and it is also in the Craft
+  side bar. The app opens, if it isn't open yet, and gets the file as if you had dropped it on the
+  app.
+- **Open in a Craft App.** Right-click a file in the explorer, choose **Open in a Craft App**, and
+  pick the app.
+
+A drag onto the app's panel itself doesn't work, and the cursor shows the "not allowed" sign. VS
+Code doesn't pass a drag that starts inside the editor (the explorer, for example) to an
+extension's panel, so the panel never sees it. A file dragged from your desktop onto the panel
+does reach the app.
 
 Lending the folders means trusting the hub and the apps with them. With the default setting, the
 app page can overwrite any file that the rules below don't protect, for example `package.json` or
@@ -150,7 +158,7 @@ workspace is in Restricted Mode.
 The hub's overlay passes the requests between the app and the extension, and only for an editor
 on an `EMBED_ORIGINS` origin. The feature needs a craft-web-gateway and app images from November 2026
 or later. File › Open and Save use the cloud storage hook, which PhotoCraft and VectorCraft have
-today. Drag and drop works in every app that accepts dropped files.
+today. Opening a dragged file works in every app that accepts dropped files.
 
 ## Install
 
