@@ -58,7 +58,9 @@ export function bytesOf(v) {
  *   where(rootUri, uri) -> "inside" | "outside" | "hidden" | "protected" (inside node_modules):
  *     where uri really is, links and short names resolved (for a path that doesn't exist yet: its
  *     nearest existing folder),
- *   locate(uriString) -> {folder index, parts} for a dropped URI under a folder, or null.
+ *   locate(uriString) -> {folder index, parts} for a dropped URI under a folder, or null,
+ *   locatePath(fsPath) -> the same for a file system path (absolute, as the editor's machine
+ *     names it), or null.
  * @param {() => "readWrite"|"readOnly"|"off"} [o.mode] what the page may do right now
  */
 export function workspaceFiles({ folders, fs, mode = () => "readWrite" }) {
@@ -160,8 +162,7 @@ export function workspaceFiles({ folders, fs, mode = () => "readWrite" }) {
       for (const u of uris.slice(0, MAX_DROP_FILES)) {
         const at = typeof u === "string" ? fs.locate(u) : null;
         if (!at) throw new Refused(`Only files in the workspace can be dropped: ${String(u).slice(0, 200)}`);
-        const folder = named()[at.folder];
-        const path = named().length > 1 ? [folder.name, ...at.parts].join("/") : at.parts.join("/");
+        const path = pathOf(at);
         const r = await checked(path);
         if (!r.rest.length) continue;
         const st = await fs.stat(r.uri);
@@ -172,7 +173,23 @@ export function workspaceFiles({ folders, fs, mode = () => "readWrite" }) {
       }
       return { files };
     },
+    // A file system path (an AI assistant names files so) to the page's path for it. Only the
+    // place is checked here; reading and writing the path check it again.
+    async place({ path }) {
+      if (mode() === "off") throw new Refused("The editor doesn't share files with this workspace.");
+      const at = typeof path === "string" && path.length < 4096 ? fs.locatePath?.(path) : null;
+      if (!at) throw new Refused(`Not in a folder open in the editor: ${String(path).slice(0, 200)}`);
+      const inside = pathOf(at);
+      if (!(await checked(inside)).rest.length) throw new Refused(`Name a file inside a workspace folder: ${path}`);
+      return inside;
+    },
   };
+
+  // {folder index, parts} (fs.locate) to a path the other requests take.
+  function pathOf(at) {
+    const list = named();
+    return list.length > 1 ? [list[at.folder].name, ...at.parts].join("/") : at.parts.join("/");
+  }
 
   /** Answers one request: {id, op, ...args} -> {type, id, ok, value | error}. */
   return async function handle(m) {

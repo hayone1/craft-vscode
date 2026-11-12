@@ -583,5 +583,10 @@ const files = workspaceFiles({
       }
       return null;
     },
+    // An absolute path; on Windows with either slash, which Uri.file takes there.
+    locatePath(path) {
+      if (!/^(\/|[a-z]:[\\/])/i.test(path)) return null;
+      return this.locate(vscode.Uri.file(path).toString());
+    },
   },
 });

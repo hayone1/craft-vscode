@@ -20,7 +20,7 @@ import {
   CallToolRequestSchema, ListToolsRequestSchema, ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-const VERSION = "0.3.2";
+const VERSION = "0.3.3";
 // The relay gives a tab 120 s per request; a long tool call can report progress and go on.
 const CALL_TIMEOUT_MS = 10 * 60_000;
 const OPEN_TIMEOUT_MS = 90_000;
@@ -289,7 +289,13 @@ export class Bridge {
       capabilities: { tools: { listChanged: true } },
       instructions: "Drives the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) open in the user's editor. " +
         "Call craft_apps to see what is open, craft_open to open an app; then use its <app>_<tool> tools (or craft_call). " +
-        "The user watches the app while you work, so tell them what you are doing.",
+        "The user watches the app while you work, so tell them what you are doing. " +
+        "Files: the apps run in a browser, not as desktop apps, so their --automation-read-root and --automation-write-root " +
+        "flags don't apply and are not needed. PhotoCraft's doc_open, doc_save and doc_export read and write " +
+        "files in the editor's workspace folders: pass an absolute path inside a folder open in the editor, e.g. " +
+        "/home/coder/project/out/cat.png. The editor's craft.workspaceFiles setting must allow it (readWrite, the default). " +
+        "Paths outside the workspace folders, and hidden folders, are refused. Tools that write several files at once " +
+        "(doc_export_layers, doc_export_data_sets) don't work in the browser: export one file at a time with doc_export.",
     });
     server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: this.listTools() }));
     server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
