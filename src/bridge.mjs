@@ -1,5 +1,5 @@
 // One local MCP server ("craft") for every craft app open in this editor. Each app panel reports
-// its tab's relay MCP URL (craft-mcp, through craft-gateway); the bridge keeps an MCP client to
+// its tab's relay MCP URL (craft-mcp, through craft-web-gateway); the bridge keeps an MCP client to
 // each and offers their tools as <app>_<tool>, plus three tools that always exist:
 //
 //   craft_apps   which apps there are, and which are open and connected

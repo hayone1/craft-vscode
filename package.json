@@ -1,7 +1,7 @@
 {
   "name": "craft-vscode",
   "displayName": "Craft Apps",
-  "description": "Open the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) from a craft-gateway in editor panels, and let Claude Code, Codex, Gemini CLI or VS Code chat drive them over one local MCP server.",
+  "description": "Open the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) from a craft-web-gateway in editor panels, and let Claude Code, Codex, Gemini CLI or VS Code chat drive them over one local MCP server.",
   "version": "0.3.0",
   "publisher": "hayone1",
   "license": "MIT",
@@ -117,7 +117,7 @@
         "craft.hubUrl": {
           "type": "string",
           "default": "",
-          "markdownDescription": "The craft-gateway address, e.g. `https://craft.example.com`. Empty: the `CRAFT_HUB_URL` environment variable."
+          "markdownDescription": "The craft-web-gateway address, e.g. `https://craft.example.com`. Empty: the `CRAFT_HUB_URL` environment variable."
         },
         "craft.apps": {
           "type": "array",
