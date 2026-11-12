@@ -7,6 +7,7 @@
 // The hello also lends the workspace's files to the page (files.mjs): the overlay asks with
 // "craft-embed:files", the webview passes each request here and the answer back.
 import { randomBytes } from "node:crypto";
+import * as fsp from "node:fs/promises";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import { fetch as httpFetch } from "undici";
@@ -177,7 +178,7 @@ async function serve(context) {
     focusedAt = Date.now();
     if (follower) report();
   }));
-  bridge = new Bridge({ apps, open: route, token, refreshToken: loadToken, log: (s) => log.info(s), focusedAt: () => focusedAt });
+  bridge = new Bridge({ apps, open: route, token, refreshToken: loadToken, log: (s) => log.info(s), focusedAt: () => focusedAt, workspace: agentFiles });
   context.subscriptions.push({ dispose: () => bridge.close() });
   try {
     await bridge.listen(port());
@@ -546,6 +547,12 @@ function filesMode() {
 
 const kindOf = (t) => (t & vscode.FileType.Directory ? "dir" : t & vscode.FileType.File ? "file" : "other");
 const samePath = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+// Files on this extension host's own disk (file: URIs) are read and written with Node's fs. VS Code's
+// fs API goes through the window, and code-server keeps an extension host running for hours after
+// its window is gone; such a host may still serve the agents' MCP port (bridge.mjs), and its
+// vscode.workspace.fs calls then fail with "Canceled". Other schemes use the API.
+const nodeKind = (s) => (s.isDirectory() ? "dir" : s.isFile() ? "file" : "other");
+const onDisk = (uri) => uri.scheme === "file";
 const files = workspaceFiles({
   folders: () => (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, uri: f.uri })),
   mode: filesMode,
@@ -553,17 +560,27 @@ const files = workspaceFiles({
     join: (uri, ...p) => vscode.Uri.joinPath(uri, ...p),
     stat: async (uri) => {
       try {
+        if (onDisk(uri)) {
+          const s = await fsp.stat(uri.fsPath);
+          return { type: nodeKind(s), size: s.size, mtime: s.mtimeMs };
+        }
         const s = await vscode.workspace.fs.stat(uri);
         return { type: kindOf(s.type), size: s.size, mtime: s.mtime };
       } catch (e) {
-        if (e?.code === "FileNotFound" || e?.code === "EntryNotFound") return null;
+        if (["FileNotFound", "EntryNotFound", "ENOENT", "ENOTDIR"].includes(e?.code)) return null;
         throw e;
       }
     },
-    list: async (uri) => (await vscode.workspace.fs.readDirectory(uri)).map(([n, t]) => [n, kindOf(t)]),
-    read: (uri) => vscode.workspace.fs.readFile(uri),
-    write: (uri, bytes) => vscode.workspace.fs.writeFile(uri, bytes),
-    mkdir: (uri) => vscode.workspace.fs.createDirectory(uri),
+    list: async (uri) => onDisk(uri)
+      ? (await fsp.readdir(uri.fsPath, { withFileTypes: true })).map((d) => [d.name, nodeKind(d)])
+      : (await vscode.workspace.fs.readDirectory(uri)).map(([n, t]) => [n, kindOf(t)]),
+    read: async (uri) => {
+      if (!onDisk(uri)) return vscode.workspace.fs.readFile(uri);
+      const b = await fsp.readFile(uri.fsPath);
+      return new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+    },
+    write: (uri, bytes) => (onDisk(uri) ? fsp.writeFile(uri.fsPath, bytes) : vscode.workspace.fs.writeFile(uri, bytes)),
+    mkdir: (uri) => (onDisk(uri) ? fsp.mkdir(uri.fsPath, { recursive: true }) : vscode.workspace.fs.createDirectory(uri)),
     // On a local disk, resolve links and short names; elsewhere the checked parts already keep
     // the path inside and visible.
     where: async (root, uri) => (await realWhere(root.fsPath, uri.fsPath)) ?? "inside",
@@ -590,3 +607,34 @@ const files = workspaceFiles({
     },
   },
 });
+
+// The files an agent names for craft_send_file and craft_get_file (bridge.mjs): an absolute path
+// in a workspace folder, or a path relative to the first folder. The same checks as the page's
+// requests (files.mjs), so craft.workspaceFiles, hidden folders and node_modules count here too.
+const fileOp = async (op, args) => {
+  const reply = await files({ op, ...args });
+  if (!reply.ok) throw new Error(reply.error);
+  return reply.value;
+};
+function absolute(path) {
+  if (typeof path !== "string" || !path.trim()) throw new Error("Name a file path.");
+  if (/^(\/|[a-z]:[\\/])/i.test(path)) return path;
+  const first = vscode.workspace.workspaceFolders?.[0];
+  if (first?.uri.scheme !== "file") throw new Error(`Give an absolute path inside a workspace folder: ${path}`);
+  return join(first.uri.fsPath, path);
+}
+const agentFiles = {
+  async read(path) {
+    const at = await fileOp("place", { path: absolute(path) });
+    return { name: at.split("/").pop(), bytes: await fileOp("read", { path: at }) };
+  },
+  async write(path, bytes) {
+    const full = absolute(path);
+    await fileOp("write", { path: await fileOp("place", { path: full }), bytes });
+    return { path: full };
+  },
+  // Refuses, before anything is copied, a path that write would refuse.
+  async check(path) {
+    await fileOp("writable", { path: await fileOp("place", { path: absolute(path) }) });
+  },
+};

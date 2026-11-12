@@ -11,13 +11,42 @@ import { CallToolRequestSchema, ListToolsRequestSchema, ToolListChangedNotificat
 import { Bridge } from "../src/bridge.mjs";
 
 // A fake relay: /<key>/<app>/mcp, tools "ui.inspect" and "draw". forget() drops its sessions, as
-// craft-mcp does when it restarts.
+// craft-mcp does when it restarts. /<key>/<app>/files stands in for the tab's craft-files.js: the
+// files it was given, and the files it "saved" (put in `saved`). Key "old" has no files endpoint.
 function relay() {
   const sessions = new Map();
   const calls = [];
+  const given = [];
+  const saved = new Map();
+  const uploads = new Map();
+  const filesRequests = [];
+  const files = (app, p) => {
+    filesRequests.push(p);
+    if (p.op === "put") {
+      const parts = uploads.get(p.upload) ?? [];
+      parts.push(Buffer.from(p.data, "base64"));
+      uploads.set(p.upload, parts);
+      if (!p.done) return { ok: true, result: { received: parts.length } };
+      given.push({ app, name: p.name, bytes: Buffer.concat(parts) });
+      return { ok: true, result: { name: p.name, result: `${app} opened it` } };
+    }
+    if (p.op === "list") return { ok: true, result: { files: [...saved].map(([name, b]) => ({ name, size: b.length, from: "download" })) } };
+    if (p.op === "read") {
+      const b = saved.get(p.name.split("/").pop());
+      if (!b) return { ok: false, error: `${app} has no saved file called ${p.name} in this tab.` };
+      return { ok: true, result: { name: p.name, size: b.length, offset: p.offset, data: b.subarray(p.offset, p.offset + p.length).toString("base64") } };
+    }
+    return { ok: false, error: "unknown" };
+  };
   const http = createServer(async (req, res) => {
-    const m = /^\/([^/]+)\/([a-z]+)\/mcp$/.exec(new URL(req.url, "http://x").pathname);
+    const m = /^\/([^/]+)\/([a-z]+)\/(mcp|files)$/.exec(new URL(req.url, "http://x").pathname);
     if (!m) return res.writeHead(404).end();
+    if (m[3] === "files") {
+      if (m[1] === "old") return res.writeHead(404).end();
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(files(m[2], JSON.parse(body))));
+    }
     const id = req.headers["mcp-session-id"];
     let transport = id && sessions.get(id);
     if (id && !transport) return res.writeHead(404).end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "Session not found" }, id: null }));
@@ -40,7 +69,7 @@ function relay() {
   });
   return new Promise((resolve) => http.listen(0, "127.0.0.1", () => resolve({
     url: (key, app) => `http://127.0.0.1:${http.address().port}/${key}/${app}/mcp`,
-    calls,
+    calls, given, saved, filesRequests,
     forget: () => sessions.clear(),
     close: () => new Promise((r) => { http.closeAllConnections(); http.close(r); }),
   })));
@@ -48,6 +77,8 @@ function relay() {
 
 const APPS = [{ name: "photocraft", title: "PhotoCraft" }, { name: "vectorcraft", title: "VectorCraft" }];
 let fake, bridge, port, client, opened, listChanged;
+// The workspace, as extension.mjs hands it over: path -> bytes.
+const workspace = new Map();
 
 before(async () => {
   fake = await relay();
@@ -56,6 +87,14 @@ before(async () => {
     apps: () => APPS,
     // Opening a panel: the tab connects a moment later, as the webview's handshake would report.
     open: (app) => { opened.push(app); setTimeout(() => bridge.update(app, { mcp: fake.url("k2", app), state: "on", title: "VectorCraft" }), 50); },
+    workspace: {
+      read: async (path) => {
+        if (!workspace.has(path)) throw new Error(`No such file: ${path}`);
+        return { name: path.split("/").pop(), bytes: new Uint8Array(workspace.get(path)) };
+      },
+      write: async (path, bytes) => { workspace.set(path, Buffer.from(bytes)); return { path }; },
+      check: async (path) => { if (path.includes("/.ssh/")) throw new Error(`Not in a folder open in the editor: ${path}`); },
+    },
   });
   port = await bridge.listen(0);
   client = new Client({ name: "test", version: "1" });
@@ -81,7 +120,7 @@ const until = async (f, ms = 5000) => {
 const textOf = (r) => r.content.map((c) => c.text).join("\n");
 
 test("with no app open there are only the bridge's own tools", async () => {
-  assert.deepEqual(await names(), ["craft_apps", "craft_open", "craft_call"]);
+  assert.deepEqual(await names(), ["craft_apps", "craft_open", "craft_call", "craft_send_file", "craft_app_files", "craft_get_file"]);
   const r = await client.callTool({ name: "photocraft_draw", arguments: {} });
   assert.equal(r.isError, true);
   assert.match(textOf(r), /isn't open\. Call craft_open/);
@@ -174,6 +213,68 @@ test("another window long-polls /commands and gets what is sent to it", async ()
   assert.deepEqual(await polled, [{ type: "open", app: "photocraft" }]);
   assert.equal(bridge.send("nobody", { type: "open", app: "photocraft" }), false);
   assert.equal((await fetch(`${base}/commands?window=nobody`)).status, 404);
+});
+
+// A file of `n` bytes that differ from part to part.
+const bytes = (n) => Buffer.from(Array.from({ length: n }, (_, i) => (i * 7 + (i >> 20)) & 255));
+
+test("craft_send_file hands a workspace file to the tab, in parts", async () => {
+  bridge.update("filmcraft", { mcp: fake.url("kf", "filmcraft"), state: "on", title: "FilmCraft" });
+  const clip = bytes(9 * 1048576 + 5); // three parts
+  workspace.set("/home/coder/project/clip.mp4", clip);
+  const r = await client.callTool({ name: "craft_send_file", arguments: { app: "filmcraft", path: "/home/coder/project/clip.mp4" } });
+  assert.equal(r.isError, undefined, textOf(r));
+  assert.match(textOf(r), /filmcraft opened it/);
+  const got = fake.given.at(-1);
+  assert.equal(got.name, "clip.mp4");
+  assert.ok(got.bytes.equals(clip));
+  assert.equal(fake.filesRequests.filter((p) => p.op === "put").length, 3);
+});
+
+test("craft_send_file says why a file can't be sent", async () => {
+  let r = await client.callTool({ name: "craft_send_file", arguments: { app: "filmcraft", path: "/home/coder/project/none.mp4" } });
+  assert.equal(r.isError, true);
+  assert.match(textOf(r), /No such file/);
+  r = await client.callTool({ name: "craft_send_file", arguments: { app: "gridcraft", path: "/home/coder/project/clip.mp4" } });
+  assert.equal(r.isError, true);
+  assert.match(textOf(r), /isn't open/);
+});
+
+test("craft_app_files lists what the tab keeps; craft_get_file copies it into the workspace", async () => {
+  const render = bytes(5 * 1048576);
+  fake.saved.set("render.mp4", render);
+  const list = JSON.parse(textOf(await client.callTool({ name: "craft_app_files", arguments: { app: "filmcraft" } })));
+  assert.deepEqual(list.files, [{ name: "render.mp4", size: render.length, from: "download" }]);
+  const r = await client.callTool({ name: "craft_get_file", arguments: { app: "filmcraft", name: "render.mp4", path: "/home/coder/project/out/render.mp4" } });
+  assert.equal(r.isError, undefined, textOf(r));
+  assert.match(textOf(r), /Copied render\.mp4 \(5242880 bytes\) from FilmCraft to \/home\/coder\/project\/out\/render\.mp4/);
+  assert.ok(workspace.get("/home/coder/project/out/render.mp4").equals(render));
+});
+
+test("craft_get_file waits for a file that is still being made, up to `wait` seconds", async () => {
+  setTimeout(() => fake.saved.set("late.png", bytes(1000)), 1200);
+  const r = await client.callTool({ name: "craft_get_file", arguments: { app: "filmcraft", name: "late.png", path: "late.png", wait: 10 } });
+  assert.equal(r.isError, undefined, textOf(r));
+  assert.ok(workspace.get("late.png").equals(bytes(1000)));
+  const none = await client.callTool({ name: "craft_get_file", arguments: { app: "filmcraft", name: "never.png", path: "never.png", wait: 0 } });
+  assert.equal(none.isError, true);
+  assert.match(textOf(none), /no saved file called never\.png/);
+});
+
+test("craft_get_file refuses a path the workspace won't take before it copies anything", async () => {
+  const reads = fake.filesRequests.filter((p) => p.op === "read").length;
+  const r = await client.callTool({ name: "craft_get_file", arguments: { app: "filmcraft", name: "render.mp4", path: "/home/coder/.ssh/authorized_keys" } });
+  assert.equal(r.isError, true);
+  assert.match(textOf(r), /Not in a folder open in the editor/);
+  assert.equal(fake.filesRequests.filter((p) => p.op === "read").length, reads);
+});
+
+test("a relay without the files endpoint gets a clear answer", async () => {
+  bridge.update("filmcraft", { mcp: fake.url("old", "filmcraft"), state: "on", title: "FilmCraft" });
+  const r = await client.callTool({ name: "craft_app_files", arguments: { app: "filmcraft" } });
+  assert.equal(r.isError, true);
+  assert.match(textOf(r), /relay doesn't take files for FilmCraft/);
+  bridge.remove("filmcraft");
 });
 
 test("only requests addressed to 127.0.0.1 or localhost are served", async () => {

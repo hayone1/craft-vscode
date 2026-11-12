@@ -1,6 +1,6 @@
 // The workspace files a framed app page may use, against temporary folders on the local disk.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, relative, sep } from "node:path";
@@ -146,7 +146,11 @@ test("nothing is shared while the setting is off; read-only refuses writes", asy
   assert.equal((await call("read", { path: "a.txt" })).ok, true);
   assert.equal((await call("write", { path: "b.txt", bytes: [1] })).ok, false);
   assert.equal((await call("mkdir", { path: "c" })).ok, false);
+  assert.equal((await call("writable", { path: "b.txt" })).ok, false);
   on = "readWrite";
+  assert.equal((await call("writable", { path: "new/c.txt" })).ok, true, "a new file in a new folder may be written");
+  assert.equal(existsSync(join(root, "new")), false, "writable writes nothing");
+  assert.equal((await call("writable", { path: "node_modules/c.txt" })).ok, false);
   assert.equal((await call("write", { path: "b.txt", bytes: [1] })).ok, true);
   assert.equal(basename(root).startsWith("craft-ws-"), true);
 });
