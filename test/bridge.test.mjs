@@ -147,6 +147,23 @@ test("another window's panels count, through /tabs", async () => {
   await until(async () => !(await names()).includes("vectorcraft_draw"));
 });
 
+test("two windows with the same app: the tab of the window focused last counts", async () => {
+  const post = (body) => fetch(`http://127.0.0.1:${port}/tabs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const tab = (key) => ({ lightcraft: { mcp: fake.url(key, "lightcraft"), state: "on", title: "LightCraft" } });
+  const used = async () => { await until(async () => (await names()).includes("lightcraft_draw")); await client.callTool({ name: "lightcraft_draw", arguments: {} }); return fake.calls.at(-1).key; };
+  // A browser tab that is gone: its window was focused long ago, and goes on reporting.
+  await post({ window: "ghost", focusedAt: 100, tabs: tab("k-ghost") });
+  assert.equal(await used(), "k-ghost");
+  await post({ window: "live", focusedAt: 200, tabs: tab("k-live") });
+  assert.equal(await used(), "k-live");
+  await post({ window: "ghost", focusedAt: 100, tabs: tab("k-ghost") });
+  assert.equal(await used(), "k-live", "the older window's report doesn't take the app back");
+  await post({ window: "ghost", focusedAt: 100, tabs: {} });
+  assert.equal(await used(), "k-live", "nor does it take the live tab away");
+  await post({ window: "live", focusedAt: 200, tabs: {} });
+  await until(async () => !(await names()).includes("lightcraft_draw"));
+});
+
 test("another window long-polls /commands and gets what is sent to it", async () => {
   const base = `http://127.0.0.1:${port}`;
   await fetch(`${base}/tabs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ window: "w3", focusedAt: 42, tabs: {} }) });
