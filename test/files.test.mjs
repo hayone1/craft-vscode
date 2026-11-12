@@ -28,6 +28,7 @@ const nodeFs = (roots) => ({
     const i = roots.findIndex((r) => path === r || path.startsWith(r + sep));
     return i < 0 ? null : { folder: i, parts: relative(roots[i], path).split(sep).filter(Boolean) };
   },
+  locatePath(path) { return this.locate(path); },
 });
 
 function setup(count = 1, mode = () => "readWrite", names = ["site", "assets"]) {
@@ -119,6 +120,19 @@ test("a drop reads the dropped workspace files, skips folders, and refuses files
   writeFileSync(join(root, ".env"), "s");
   assert.equal((await call("drop", { uris: [`file://${join(root, ".env")}`] })).ok, false);
   assert.equal((await call("drop", { uris: "nope" })).ok, false);
+});
+
+test("an assistant's file system path becomes the page's path, only for files in the folders", async () => {
+  const one = setup();
+  assert.equal(await one.ok("place", { path: join(one.roots[0], "out", "cat.png") }), "out/cat.png", "a new file is fine");
+  assert.equal((await one.call("place", { path: one.roots[0] })).ok, false, "the folder itself isn't a file");
+  assert.equal((await one.call("place", { path: join(temp(), "x.png") })).ok, false, "outside the folders");
+  assert.equal((await one.call("place", { path: join(one.roots[0], ".git", "x") })).ok, false, "hidden");
+  assert.equal((await one.call("place", { path: "cat.png" })).ok, false, "relative");
+  const two = setup(2);
+  assert.equal(await two.ok("place", { path: join(two.roots[1], "bg.png") }), "assets/bg.png");
+  const off = setup(1, () => "off");
+  assert.equal((await off.call("place", { path: join(off.roots[0], "a.png") })).ok, false);
 });
 
 test("nothing is shared while the setting is off; read-only refuses writes", async () => {

@@ -121,6 +121,16 @@ the app page, and the page shows them in two places:
   app.
 - **Open in a Craft App.** Right-click a file in the explorer, choose **Open in a Craft App**, and
   pick the app.
+- **The coding agent opens and saves files by path.** An agent such as Claude Code can tell
+  PhotoCraft to open or save a file with an ordinary path, for example
+  `/home/coder/project/out/cat.png`. The path must be inside a workspace folder. The app page asks
+  the extension where that path is in the lent folders, and then reads or writes the file there.
+  The desktop apps need the flags `--automation-read-root` and `--automation-write-root` for this,
+  but those flags don't exist in the browser, so an agent doesn't need them here. PhotoCraft's
+  `doc_open`, `doc_save` and `doc_export` tools work this way. Its tools that write many files at
+  once, `doc_export_layers` and `doc_export_data_sets`, don't work in the browser yet. The PhotoCraft
+  image needs the matching change from `hayone1/Docker_Images`, and the hub needs
+  craft-web-gateway with the same change.
 
 A drag onto the app's panel itself doesn't work, and the cursor shows the "not allowed" sign. VS
 Code doesn't pass a drag that starts inside the editor (the explorer, for example) to an
