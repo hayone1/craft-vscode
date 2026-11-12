@@ -6,7 +6,7 @@ agent can be Claude Code, Codex, Gemini CLI or the chat that is built into VS Co
 code-server you can do all of it in one browser tab, on an iPad too: the app runs in a panel, and
 Claude works in it from the panel next to it while you watch.
 
-The apps come from a [craft-gateway](https://github.com/hayone1/craft-gateway), formerly
+The apps come from a [craft-web-gateway](https://github.com/hayone1/craft-web-gateway), formerly
 craft-ai-hub, which this README calls "the hub". The apps keep the hub's sign-in, cloud storage and
 AI chat (the round ✦ button). This extension adds:
 
@@ -148,7 +148,7 @@ A change to the setting takes effect at once in every open panel. Nothing is len
 workspace is in Restricted Mode.
 
 The hub's overlay passes the requests between the app and the extension, and only for an editor
-on an `EMBED_ORIGINS` origin. The feature needs a craft-gateway and app images from November 2026
+on an `EMBED_ORIGINS` origin. The feature needs a craft-web-gateway and app images from November 2026
 or later. File › Open and Save use the cloud storage hook, which PhotoCraft and VectorCraft have
 today. Drag and drop works in every app that accepts dropped files.
 
