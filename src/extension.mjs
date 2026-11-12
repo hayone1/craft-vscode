@@ -77,7 +77,22 @@ export async function activate(context) {
   terminalEnv.replace("CRAFT_MCP_URL", mcpUrl());
 
   const tree = { onDidChangeTreeData: changed.event, getTreeItem: (a) => item(a), getChildren: () => apps() };
-  context.subscriptions.push(vscode.window.registerTreeDataProvider("craft.apps", tree));
+  // The apps list: in the Craft side bar and as a section of the Explorer. A file dragged from the
+  // explorer onto an app opens in that app. (VS Code doesn't let a drag from inside the editor
+  // reach a webview panel, so the list is where such drops land.)
+  const dropOnApp = {
+    dropMimeTypes: ["text/uri-list"],
+    dragMimeTypes: [],
+    handleDrop: async (target, data) => {
+      const text = await data.get("text/uri-list")?.asString();
+      const uris = String(text ?? "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+      const app = target?.name ?? (await pick());
+      if (app && uris.length) await openFilesIn(app, uris);
+    },
+  };
+  for (const id of ["craft.apps", "craft.appsExplorer"]) {
+    context.subscriptions.push(vscode.window.createTreeView(id, { treeDataProvider: tree, dragAndDropController: dropOnApp }));
+  }
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   status.command = "craft.open";
@@ -105,6 +120,13 @@ export async function activate(context) {
     }),
     vscode.commands.registerCommand("craft.newMcpToken", newToken),
     vscode.commands.registerCommand("craft.setMcpUrl", setMcpUrl),
+    // Explorer › right-click › Open in a Craft App (one file or the selection).
+    vscode.commands.registerCommand("craft.openInApp", async (uri, selected) => {
+      const list = (Array.isArray(selected) && selected.length ? selected : uri ? [uri] : []).map((u) => u.toString());
+      if (!list.length) return;
+      const app = await pick();
+      if (app) await openFilesIn(app, list);
+    }),
     vscode.commands.registerCommand("craft.registerAgents", () => registerAgents({ asked: true })),
     // The 0.1 name of the command above.
     vscode.commands.registerCommand("craft.registerClaudeCode", () => registerAgents({ asked: true })),
@@ -335,6 +357,7 @@ function setup(panel, app) {
       try { await panel.webview.postMessage(packBytes(reply)); } catch {} // the panel closed meanwhile
       return;
     }
+    if (m?.type === "craft-hub:session") flushFiles(app, panel);
     if (m?.type === "craft-hub:session") {
       const tab = typeof m.mcp === "string" && /^https:\/\/|^http:\/\//.test(m.mcp)
         ? { mcp: m.mcp, state: String(m.state ?? "off"), title: String(m.title ?? titleOf(app)) } : null;
@@ -457,6 +480,8 @@ function page(app) {
       vscode.postMessage(e.data);
     } else if (e.data && e.data.type === "craft-embed:files-reply") {
       frame.contentWindow && frame.contentWindow.postMessage(unpack(e.data), HUB);
+    } else if (e.data && e.data.type === "craft-embed:open-files") {
+      frame.contentWindow && frame.contentWindow.postMessage(unpack(e.data), HUB);
     } else if (e.data && e.data.type === "craft-embed:lend") {
       FILES = e.data.files; hello();
     } else if (e.data && e.data.type === "reload") {
@@ -468,6 +493,26 @@ function page(app) {
   document.getElementById("hide").onclick = () => { note.hidden = true; };
 </script>
 </body></html>`;
+}
+
+// ---- files handed to an app (a drop on the apps list, or Open in a Craft App) -------------------
+/** @type {Map<string, object[]>} files waiting for their app's page to be ready */
+const waiting = new Map();
+async function openFilesIn(app, uris) {
+  const reply = await files({ op: "drop", uris });
+  if (!reply.ok) return vscode.window.showErrorMessage(`Craft apps: ${reply.error}`);
+  const list = reply.value.files;
+  if (!list.length) return vscode.window.showInformationMessage("Craft apps: only files can be opened in an app, not folders.");
+  waiting.set(app, [...(waiting.get(app) ?? []), ...list]);
+  const ready = panels.has(app) && local.get(app)?.state === "on";
+  await open(app, false);
+  if (ready) flushFiles(app, panels.get(app));
+}
+function flushFiles(app, panel) {
+  const list = waiting.get(app);
+  if (!list?.length || !panel) return;
+  waiting.delete(app);
+  panel.webview.postMessage(packBytes({ type: "craft-embed:open-files", files: list })).then(undefined, () => {});
 }
 
 // ---- workspace files for the app pages (files.mjs) --------------------------------------------
