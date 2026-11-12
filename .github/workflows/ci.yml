@@ -50,4 +50,4 @@ jobs:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
           vsix="craft-vscode-$(node -p "require('./package.json').version").vsix"
-          if [ -n "$OVSX_PAT" ]; then npx ovsx publish "$vsix"; else npx ovsx publish "$vsix" --trusted-publishing; fi
+          if [ -n "$OVSX_PAT" ]; then npx ovsx publish "$vsix"; else env -u OVSX_PAT npx ovsx publish "$vsix" --trusted-publishing; fi
