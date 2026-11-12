@@ -1,4 +1,4 @@
-// Craft apps in VS Code: each app from craft-ai-hub opens in an editor panel (the hub page in a
+// Craft apps in VS Code: each app from craft-gateway opens in an editor panel (the hub page in a
 // webview's iframe), and one local MCP server (bridge.mjs) lets Claude Code, or any MCP client in
 // this workspace, drive the apps that are open.
 //
@@ -309,7 +309,7 @@ async function pick() {
 
 async function open(app, fromAgent) {
   if (!hubUrl()) {
-    const url = await vscode.window.showInputBox({ prompt: "The craft-ai-hub address", placeHolder: "https://craft.example.com", ignoreFocusOut: true });
+    const url = await vscode.window.showInputBox({ prompt: "The craft-gateway address", placeHolder: "https://craft.example.com", ignoreFocusOut: true });
     if (!url) return;
     await settings().update("hubUrl", url, vscode.ConfigurationTarget.Global);
   }

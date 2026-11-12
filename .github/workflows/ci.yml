@@ -42,11 +42,12 @@ jobs:
       - name: Publish to the Visual Studio Marketplace
         if: startsWith(github.ref, 'refs/tags/v')
         run: npx vsce publish --oidc --packagePath "craft-vscode-$(node -p "require('./package.json').version").vsix"
-      # Open VSX still uses a token; without the OVSX_PAT secret this step is skipped.
+      # Open VSX Trusted Publishing (a trusted publisher on the hayone1 namespace). An OVSX_PAT
+      # secret, when set, wins: ovsx prefers a token.
       - name: Publish to Open VSX
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
-          [ -n "$OVSX_PAT" ] || { echo "::notice::No OVSX_PAT secret: skipped Open VSX"; exit 0; }
-          npx ovsx publish "craft-vscode-$(node -p "require('./package.json').version").vsix"
+          vsix="craft-vscode-$(node -p "require('./package.json').version").vsix"
+          if [ -n "$OVSX_PAT" ]; then npx ovsx publish "$vsix"; else env -u OVSX_PAT npx ovsx publish "$vsix" --trusted-publishing; fi
