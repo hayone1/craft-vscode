@@ -5,12 +5,22 @@
 // localhost on the desktop, the remote's port forwarding otherwise, such as Coder's
 // https://<port>--<agent>--<workspace>--<user>.<domain>). No vscode import, so the tests can run
 // it in plain Node.
-import { createServer, request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { Agent as HttpAgent, ClientRequest, createServer } from "node:http";
+import { Agent as HttpsAgent } from "node:https";
 
 const HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "trailer", "host"]);
 // Asked by another window that wants the same port: which app address does this proxy serve?
 export const PROBE = "/.craft-vscode-proxy";
+
+// Requests to the upstream are built from ClientRequest and agents of our own, not http.request or
+// https.request: VS Code replaces those in the extension host to apply the window's proxy settings,
+// and the window answers that lookup. code-server keeps an extension host running after its
+// browser tab has gone, and this proxy keeps its port, so its requests would wait forever.
+// (An https upstream still goes through VS Code's tls.connect, which may load certificates once.)
+// Idle connections close before a typical upstream's own 5 s idle timeout would reset them.
+const AGENTS = { "http:": new HttpAgent({ keepAlive: true, timeout: 4000 }), "https:": new HttpsAgent({ keepAlive: true, timeout: 4000 }) };
+const upstreamRequest = (target, options, onResponse) =>
+  new ClientRequest(target, { ...options, agent: options.agent ?? AGENTS[target.protocol] }, onResponse);
 
 /**
  * Whether an app address goes through the local proxy. "auto": plain http, which an https editor
@@ -90,7 +100,7 @@ export class AppProxy {
     const headers = {};
     for (const [k, v] of Object.entries(req.headers)) if (!HOP.has(k)) headers[k] = v;
     headers.host = target.host;
-    const up = (target.protocol === "https:" ? httpsRequest : httpRequest)(target, { method: req.method, headers }, (r) => {
+    const up = upstreamRequest(target, { method: req.method, headers }, (r) => {
       const h = { ...r.headers };
       for (const k of HOP) delete h[k];
       // A redirect to the upstream's own address stays on this proxy.
@@ -102,13 +112,17 @@ export class AppProxy {
       if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" }).end(`The app at ${this.upstream.origin} isn't reachable: ${e.message}`);
       else res.destroy();
     });
+    // A browser that goes away ends the upstream request too (a long stream would hold it open).
+    res.on("close", () => { if (!res.writableFinished) up.destroy(); });
     req.pipe(up);
   }
 
   upgrade(req, socket, head) {
     const target = this.target(req);
     const headers = { ...req.headers, host: target.host };
-    const up = (target.protocol === "https:" ? httpsRequest : httpRequest)(target, { method: req.method, headers });
+    // A connection that becomes a tunnel never goes back to a pool: one agent each.
+    const agent = target.protocol === "https:" ? new HttpsAgent() : new HttpAgent();
+    const up = upstreamRequest(target, { method: req.method, headers, agent });
     up.on("upgrade", (r, upSocket, upHead) => {
       socket.write(`HTTP/1.1 101 Switching Protocols\r\n${Object.entries(r.headers).map(([k, v]) => `${k}: ${v}`).join("\r\n")}\r\n\r\n`);
       if (upHead?.length) socket.write(upHead);
