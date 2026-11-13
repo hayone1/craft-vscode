@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { createServer, request } from "node:http";
+import http, { createServer, request } from "node:http";
+import https from "node:https";
+import { syncBuiltinESMExports } from "node:module";
 import { test } from "node:test";
 import { AppProxy, PROBE, framedAddress, needsProxy, probe } from "../src/proxy.mjs";
 
@@ -73,6 +75,26 @@ test("AppProxy forwards requests, bodies and redirects to the upstream", async (
 
   const who = await call(port, PROBE);
   assert.deepEqual(JSON.parse(who.body), { upstream: `${up.origin}/` });
+});
+
+test("AppProxy doesn't use http.request, which VS Code replaces in the extension host", async (t) => {
+  // VS Code's replacement asks the window for proxy settings; with the window gone it never
+  // answers. Stand in for it with one that never sends anything.
+  const upstream = await listen((req, res) => res.writeHead(200).end(`got ${req.url}`));
+  t.after(() => { upstream.close(); upstream.closeAllConnections(); });
+  const port = await freePort();
+  const proxy = new AppProxy({ upstream: new URL(`http://127.0.0.1:${upstream.address().port}/`), port, hosts: ["127.0.0.1"] });
+  await proxy.listen();
+  t.after(() => proxy.close());
+  const saved = [http.request, http.get, https.request, https.get];
+  const never = () => { throw new Error("http.request was used"); };
+  http.request = http.get = https.request = https.get = never;
+  syncBuiltinESMExports();
+  t.after(() => { [http.request, http.get, https.request, https.get] = saved; syncBuiltinESMExports(); });
+  // fetch is undici, which doesn't go through http.request either.
+  const r = await fetch(`http://127.0.0.1:${port}/a.js`, { signal: AbortSignal.timeout(5000) });
+  assert.equal(r.status, 200);
+  assert.equal(await r.text(), "got /a.js");
 });
 
 test("AppProxy answers 502 when the upstream is down", async (t) => {
