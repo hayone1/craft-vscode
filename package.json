@@ -1,8 +1,8 @@
 {
   "name": "craft-vscode",
   "displayName": "Craft Apps",
-  "description": "Open the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) from a craft-web-gateway in editor panels, and let Claude Code, Codex, Gemini CLI or VS Code chat drive them over one local MCP server.",
-  "version": "0.4.0",
+  "description": "Open the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) in editor panels, and let Claude Code, Codex, Gemini CLI or VS Code chat drive them over one local MCP server.",
+  "version": "0.5.0",
   "publisher": "hayone1",
   "license": "MIT",
   "repository": {
@@ -73,7 +73,7 @@
       },
       {
         "command": "craft.signIn",
-        "title": "Sign In to the Hub",
+        "title": "Sign In to the App in a Browser",
         "category": "Craft"
       },
       {
@@ -94,6 +94,11 @@
       {
         "command": "craft.setMcpUrl",
         "title": "Set an App's MCP URL by Hand",
+        "category": "Craft"
+      },
+      {
+        "command": "craft.setRelayToken",
+        "title": "Set the Relay Token",
         "category": "Craft"
       },
       {
@@ -139,10 +144,21 @@
     "configuration": {
       "title": "Craft Apps",
       "properties": {
+        "craft.appUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Where the apps are. `{app}` stands for the app's name: `https://{app}.example.com/`. An address without `{app}` serves every app under `/<app>/`. Empty: the `CRAFT_APP_URL` environment variable."
+        },
+        "craft.relayUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional: craft-mcp's public address, e.g. `https://craft-mcp.example.com`. With a relay token (`CRAFT_RELAY_TOKEN`, or **Craft: Set the Relay Token**), each panel gets its relay connection from craft-mcp directly. Without it, the app page asks its own server. Empty: the `CRAFT_RELAY_URL` environment variable."
+        },
         "craft.hubUrl": {
           "type": "string",
           "default": "",
-          "markdownDescription": "The craft-web-gateway address, e.g. `https://craft.example.com`. Empty: the `CRAFT_HUB_URL` environment variable."
+          "markdownDeprecationMessage": "Use `craft.appUrl`. An address here still works: the apps open at `<address>/<app>/`.",
+          "markdownDescription": "The name of `craft.appUrl` before version 0.5. Empty: the `CRAFT_HUB_URL` environment variable."
         },
         "craft.apps": {
           "type": "array",
@@ -150,7 +166,7 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "The hub's apps, in order. Empty: `CRAFT_APPS` (comma separated), else PhotoCraft, VectorCraft, LightCraft, FilmCraft and EffectCraft."
+          "markdownDescription": "The apps, in order. Empty: `CRAFT_APPS` (comma separated), else PhotoCraft, VectorCraft, LightCraft, FilmCraft and EffectCraft."
         },
         "craft.mcpPort": {
           "type": "number",

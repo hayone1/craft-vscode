@@ -1,6 +1,6 @@
 // The workspace files that a framed app page may use: the app's File › Open and Save list, read
 // and write files under the workspace folders, and files dragged from the explorer onto the app
-// are read here. The page asks through the hub's overlay ("craft-embed:files" messages); see
+// are read here. The page asks with "craft-embed:files" messages (craft-embed.js in the app images); see
 // extension.mjs for the relay.
 //
 // Paths are relative and use "/". With one workspace folder, a path starts inside that folder.

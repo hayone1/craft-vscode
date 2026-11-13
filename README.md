@@ -6,9 +6,10 @@ agent can be Claude Code, Codex, Gemini CLI or the chat that is built into VS Co
 code-server you can do all of it in one browser tab, on an iPad too: the app runs in a panel, and
 Claude works in it from the panel next to it while you watch.
 
-The apps come from a [craft-web-gateway](https://github.com/hayone1/craft-web-gateway), formerly
-craft-ai-hub, which this README calls "the hub". The apps keep the hub's sign-in, cloud storage and
-AI chat (the round ✦ button). This extension adds:
+Each panel shows the app's own web page. The pages come from the `hayone/<app>:remote` images
+that [hayone1/Docker_Images](https://github.com/hayone1/Docker_Images) builds, and the coding
+agent reaches them through the [craft-mcp](https://hub.docker.com/r/hayone/craft-mcp) relay. The
+section [What the apps need](#what-the-apps-need) lists the setup. This extension adds:
 
 - **A Craft view** in the activity bar that lists the apps. Click one to open it in an editor
   panel. Panels keep running when you switch tabs, and come back after a reload.
@@ -85,34 +86,64 @@ browser tab (code-server)
 ├─ Claude Code panel ── MCP ──▶ craft-vscode (127.0.0.1:47811, in the workspace)
 │                                  │ MCP, one client per open app
 └─ VectorCraft panel               ▼
-   └─ hub page (iframe) ◀── WebSocket ── craft-mcp relay ◀── <app> CLI bridge
+   └─ app page (iframe) ◀── WebSocket ── craft-mcp relay ◀── <app> CLI bridge
 ```
+
+## What the apps need
+
+The extension needs three things: the app pages, the relay, and a way to get a relay connection
+for each panel. You don't need craft-web-gateway. The gateway is a separate product with its own
+launcher and chat, and the extension doesn't use it.
+
+1. **Run the app images.** Run `hayone/<app>:remote` for each app, for example
+   `hayone/photocraft:remote`. Each image serves its app on port 8080. Give each app an address
+   that the editor's browser can reach, such as `https://photocraft.example.com/`.
+2. **Let the editor frame the apps.** Set `EMBED_ORIGINS` on every app container to the origin
+   that your editor serves webviews from. For code-server behind Coder, that is the origin of the
+   workspace apps, for example `EMBED_ORIGINS=https://*.code.example.com`. A `*` stands for one or
+   more parts of the host name. VS Code on the desktop needs no entry, because the apps always
+   allow VS Code's own webviews.
+3. **Run the relay.** Run `hayone/craft-mcp` with `MCP_KEY` (a secret of at least 16 characters)
+   and `PUBLIC_HOST` (the relay's public address, for example `craft-mcp.example.com`).
+4. **Give each panel a relay connection.** Pick one of the two ways below.
+   - **The editor asks the relay.** Set `MINT_TOKENS` on craft-mcp to one or more random tokens
+     of at least 16 characters, separated by commas. In the editor, set `craft.relayUrl` to the
+     relay's address and give the editor one of the tokens: set `CRAFT_RELAY_TOKEN`, or run
+     **Craft: Set the Relay Token**. A mint token can only make relay connections. The token
+     can't read cloud storage or act as the proxy in front of the apps.
+   - **The app's server asks the relay.** A proxy in front of the apps forwards
+     `POST /_assistant/session` to craft-mcp's `/mint` and adds the header
+     `X-Gateway-Secret: <MCP_KEY>`. The proxy can also sign people in first. The app's own **AI
+     assistant** button in a browser tab uses the same route.
+5. **Tell the extension where the apps are.** Set `craft.appUrl`, or `CRAFT_APP_URL` in the
+   workspace's environment, to an address with `{app}` in it, for example
+   `https://{app}.example.com/`. An address without `{app}` serves every app under `/<app>/`, so
+   `https://craft.example.com` opens PhotoCraft at `https://craft.example.com/photocraft/`.
 
 ## How a panel gets connected
 
-The panel shows the hub page `https://<hub>/<app>/` in an iframe. The extension's page asks the
-hub's overlay for the tab's MCP URL (a `craft-embed:hello` message). The overlay answers its
-direct parent only, and only if the parent's origin is in the hub's `EMBED_ORIGINS`. It also
-connects the tab to the relay first, if it isn't connected yet. The extension then keeps an MCP
-client to that URL. Nothing is copied by hand.
+The panel shows the app's page, for example `https://photocraft.example.com/`, in an iframe. The
+extension's part of the panel sends the page a `craft-embed:hello` message. The page answers its
+direct parent only, and only when the parent's origin is allowed (see step 2 above). When the
+editor has a relay connection for the panel, the hello carries the connection, and the page uses
+it. Otherwise the page asks its own server for one. The page then tells the panel the tab's MCP
+URL, and the extension keeps an MCP client to that URL. Nothing is copied by hand.
 
-On the hub, set `EMBED_ORIGINS` to the origin your editor serves webviews from. For code-server
-behind Coder, that is the workspace app's origin:
+Each editor window makes its own relay connection for each app. Two windows with the same app
+open therefore don't take each other's connection over.
 
-```
-EMBED_ORIGINS=https://*.code.example.com
-```
-
-A hub without `EMBED_ORIGINS` still works: open the app's AI chat (the round ✦ button) › **Connect** tab, copy the
-URL, and run **Craft: Set an App's MCP URL by Hand**.
+When something is missing, the panel says what it is. A page that doesn't allow the editor names
+the origin to add to `EMBED_ORIGINS`. A page without a relay connection says so too. As a last
+resort, open the app in a browser tab, press its **AI assistant** button, copy the URL, and run
+**Craft: Set an App's MCP URL by Hand**.
 
 ## Workspace files
 
 The apps can open and save files in your workspace folders. The extension lends the folders to
 the app page, and the page shows them in two places:
 
-- **File › Open and Save.** The apps' file dialog lists a **VS Code** place next to the hub's
-  cloud folders. A document that you open from the workspace keeps its place, so **Save** writes
+- **File › Open and Save.** The apps' file dialog lists a **VS Code** place next to the cloud
+  folders, if the apps have any. A document that you open from the workspace keeps its place, so **Save** writes
   the file back without a dialog. The new file shows up in the explorer right away. Inside the
   app, the path of such a file looks like `cloud:workspace/assets/logo.png`.
 - **Drag a file onto an app.** Drag a file from the explorer onto an app's name in the **Craft
@@ -130,10 +161,10 @@ Code doesn't pass a drag that starts inside the editor (the explorer, for exampl
 extension's panel, so the panel never sees it. A file dragged from your desktop onto the panel
 does reach the app.
 
-Lending the folders means trusting the hub and the apps with them. With the default setting, the
-app page can overwrite any file that the rules below don't protect, for example `package.json` or
-a source file. The hub's AI assistant drives the apps, so a bad instruction to the assistant could
-lead to such a save. Use `"readOnly"` if the apps should only open files from the workspace.
+Lending the folders means trusting the apps with them. With the default setting, the app page can
+overwrite any file that the rules below don't protect, for example `package.json` or a source
+file. An AI assistant drives the apps, so a bad instruction to the assistant could lead to such a
+save. Use `"readOnly"` if the apps should only open files from the workspace.
 
 These rules always hold:
 
@@ -158,10 +189,11 @@ The setting `craft.workspaceFiles` picks what the apps may do:
 A change to the setting takes effect at once in every open panel. Nothing is lent while the
 workspace is in Restricted Mode.
 
-The hub's overlay passes the requests between the app and the extension, and only for an editor
-on an `EMBED_ORIGINS` origin. The feature needs a craft-web-gateway and app images from November 2026
+The app page (`craft-embed.js` in the images) passes the requests between the app and the
+extension, and only for an editor that it allows. The feature needs app images from November 2026
 or later. File › Open and Save use the cloud storage hook, which PhotoCraft and VectorCraft have
-today. Opening a dragged file works in every app that accepts dropped files.
+today. Opening a dragged file works in every app that accepts dropped files. A container with
+`EMBED_FILES=false` doesn't take the editor's files at all.
 
 ### Files and the coding agent
 
@@ -217,14 +249,14 @@ code-server --install-extension hayone1.craft-vscode   # code-server (Open VSX)
 Each [release](https://github.com/hayone1/craft-vscode/releases/latest) also has the `.vsix`
 file, for machines that can't reach either store: `code --install-extension craft-vscode-<version>.vsix`.
 
-Set the hub's address in the `craft.hubUrl` setting, or in the `CRAFT_HUB_URL` environment
-variable of the workspace.
+Then set up the apps and tell the extension where they are, as the section
+[What the apps need](#what-the-apps-need) describes.
 
 ### Coder
 
 In a template that uses Coder's `code-server` module, add the extension to the module's
-`extensions` list. The module installs extensions from Open VSX. Then set the hub for the
-workspace on the agent:
+`extensions` list. The module installs extensions from Open VSX. Then set the apps' address for
+the workspace on the agent:
 
 ```hcl
 module "code-server" {
@@ -235,7 +267,10 @@ module "code-server" {
 
 resource "coder_agent" "main" {
   env = {
-    CRAFT_HUB_URL = "https://craft.example.com"
+    CRAFT_APP_URL = "https://{app}.example.com/"
+    # Only when the editor asks the relay itself (MINT_TOKENS on craft-mcp):
+    # CRAFT_RELAY_URL   = "https://craft-mcp.example.com"
+    # CRAFT_RELAY_TOKEN = var.craft_relay_token
   }
 }
 ```
@@ -247,7 +282,8 @@ itself. To choose the MCP token yourself, also set `CRAFT_MCP_TOKEN` in the agen
 
 | Setting | Default | |
 | --- | --- | --- |
-| `craft.hubUrl` | `CRAFT_HUB_URL` | The hub, e.g. `https://craft.example.com`. |
+| `craft.appUrl` | `CRAFT_APP_URL` | Where the apps are, e.g. `https://{app}.example.com/`. `craft.hubUrl` and `CRAFT_HUB_URL`, the names before version 0.5, still work. |
+| `craft.relayUrl` | `CRAFT_RELAY_URL` | The relay's address, when the editor asks the relay itself. The token comes from `CRAFT_RELAY_TOKEN` or **Craft: Set the Relay Token**, which keeps the token in the editor's secret storage. |
 | `craft.apps` | `CRAFT_APPS`, else the five apps | The apps, in order. |
 | `craft.mcpPort` | `47811` | The local MCP server's port. |
 | `craft.agents` | `["claude", "codex", "gemini"]` | The coding agents that get the server. |
@@ -255,15 +291,14 @@ itself. To choose the MCP token yourself, also set `CRAFT_MCP_TOKEN` in the agen
 
 ## Notes
 
-- **Signing in.** The panel uses the hub's own sign-in. If the hub's sign-in page can't show in
-  a frame, press **Sign in** in the panel's note, sign in in the browser tab that opens, then
-  **Reload**. The hub and the editor must be on the same site (for example
-  `craft.example.com` and `*.code.example.com`), or Safari won't send the hub's cookie to the
-  panel.
+- **Signing in.** When a proxy in front of the apps signs people in, the panel uses that
+  sign-in. If the sign-in page can't show in a frame, press **Sign in** in the panel's note, sign
+  in in the browser tab that opens, then **Reload**. The apps and the editor must be on the same
+  site (for example `photocraft.example.com` and `*.code.example.com`), or Safari won't send the
+  sign-in cookie to the panel.
 - **code-server, not "VS Code Web".** code-server serves webviews from the workspace's own
-  origin, so the hub's cookie and the handshake work. Microsoft's VS Code server (`code
-  serve-web`) serves them from `vscode-cdn.net`, another site, where Safari blocks the hub's
-  cookie.
+  origin, so the sign-in cookie and the handshake work. Microsoft's VS Code server (`code
+  serve-web`) serves them from `vscode-cdn.net`, another site, where Safari blocks the cookie.
 - **More than one window.** The first window serves the port. The others report their panels to
   it and take over if it stops. An agent's `craft_open` goes to the window that has the app,
   else to the one focused last. This matters in code-server, which keeps a closed tab's
@@ -280,8 +315,9 @@ npm run package   # dist/extension.js and craft-vscode-<version>.vsix
 ```
 
 `src/agents.mjs` writes the server into the agents' settings, and `src/token.mjs` finds or makes
-the token. `src/files.mjs` answers the app pages' file requests. All three run in plain Node too,
-and the tests use temporary folders.
+the token. `src/files.mjs` answers the app pages' file requests. `src/embed.mjs` works out each
+app's address and gets relay connections. All four run in plain Node too, and the tests use
+temporary folders.
 
 ## Release
 
