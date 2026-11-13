@@ -6,6 +6,16 @@ agent can be Claude Code, Codex, Gemini CLI or the chat that is built into VS Co
 code-server you can do all of it in one browser tab, on an iPad too: the app runs in a panel, and
 Claude works in it from the panel next to it while you watch.
 
+PhotoCraft in a panel opens a picture from the workspace, saves back into the workspace, and takes a file dragged
+from the Explorer:
+
+![PhotoCraft in VS Code: open from the workspace, save into it, drag a file in](https://raw.githubusercontent.com/hayone1/craft-vscode/main/media/craft-vscode-app.gif)
+
+Claude Code in the terminal gets one prompt. It adds a title in PhotoCraft, saves the picture into
+the workspace, then animates the picture in EffectCraft and saves that project too:
+
+![Claude Code drives PhotoCraft and EffectCraft and passes the file between them through the workspace](https://raw.githubusercontent.com/hayone1/craft-vscode/main/media/craft-vscode-agent.gif)
+
 Each panel shows the app's own web page. The pages come from the `hayone/<app>:remote` images
 that [hayone1/Docker_Images](https://github.com/hayone1/Docker_Images) builds, and the coding
 agent reaches them through the [craft-mcp](https://hub.docker.com/r/hayone/craft-mcp) relay. The
