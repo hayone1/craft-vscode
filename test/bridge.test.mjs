@@ -166,7 +166,7 @@ test("a call after the relay forgot the session starts a new one", async () => {
   assert.equal(textOf(r), 'photocraft did draw {"shape":"square"}');
 });
 
-test("a new MCP URL (New URL in the hub) replaces the old connection", async () => {
+test("a new MCP URL (a new relay connection) replaces the old connection", async () => {
   bridge.update("photocraft", { mcp: fake.url("k3", "photocraft"), state: "on" });
   await until(async () => (await names()).includes("photocraft_draw"));
   await client.callTool({ name: "photocraft_draw", arguments: {} });

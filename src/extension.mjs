@@ -1,11 +1,13 @@
-// Craft apps in VS Code: each app from craft-web-gateway opens in an editor panel (the hub page in a
-// webview's iframe), and one local MCP server (bridge.mjs) lets Claude Code, or any MCP client in
-// this workspace, drive the apps that are open.
+// Craft apps in VS Code: each app opens in an editor panel (the app's own page, from the
+// hayone/<app>:remote images, in a webview's iframe), and one local MCP server (bridge.mjs) lets
+// Claude Code, or any MCP client in this workspace, drive the apps that are open.
 //
-// The panel learns its tab's MCP URL from the hub's overlay (EMBED_ORIGINS on the hub): the
-// webview says "craft-embed:hello" to the framed page, the overlay answers "craft-hub:session".
-// The hello also lends the workspace's files to the page (files.mjs): the overlay asks with
-// "craft-embed:files", the webview passes each request here and the answer back.
+// The panel learns its tab's MCP URL from the app page (craft-embed.js in the images; the page's
+// server lists the editor's origin in EMBED_ORIGINS): the webview says "craft-embed:hello" to the
+// framed page, with a relay connection when this window made one (embed.mjs), and the page
+// answers "craft-embed:session". The hello also lends the workspace's files to the page
+// (files.mjs): the page asks with "craft-embed:files", the webview passes each request here and
+// the answer back.
 import { randomBytes } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import { join } from "node:path";
@@ -13,6 +15,7 @@ import * as vscode from "vscode";
 import { fetch as httpFetch } from "undici";
 import { AGENTS, syncAgents } from "./agents.mjs";
 import { Bridge } from "./bridge.mjs";
+import { Sessions, appAddress, mintSession } from "./embed.mjs";
 import { realWhere, workspaceFiles } from "./files.mjs";
 import { resolveToken, rotateToken, tokenFile } from "./token.mjs";
 
@@ -25,7 +28,18 @@ const VIEW_TYPE = "craft.app";
 const SERVER = "craft";
 
 const settings = () => vscode.workspace.getConfiguration("craft");
-const hubUrl = () => String(settings().get("hubUrl") || process.env.CRAFT_HUB_URL || "").trim().replace(/\/+$/, "");
+// Where the apps are: https://{app}.example.com/, or a base that serves each app under /<app>/.
+// craft.hubUrl and CRAFT_HUB_URL are the names from before 0.5, when the apps came from
+// craft-web-gateway; such an address still works as a base.
+const appTemplate = () => String(settings().get("appUrl") || process.env.CRAFT_APP_URL
+  || settings().get("hubUrl") || process.env.CRAFT_HUB_URL || "").trim();
+const appUrl = (app) => appAddress(appTemplate(), app);
+// craft-mcp's public address and a token from its MINT_TOKENS: the panel makes its tab's relay
+// connection itself. Without them, the app page asks its own server for one.
+const relayUrl = () => String(settings().get("relayUrl") || process.env.CRAFT_RELAY_URL || "").trim().replace(/\/+$/, "");
+const RELAY_SECRET = "craft.relayToken";
+let secrets;
+const relayToken = async () => String(process.env.CRAFT_RELAY_TOKEN || (await secrets?.get(RELAY_SECRET).then(undefined, () => "")) || "").trim();
 const DEFAULT_APPS = ["photocraft", "vectorcraft", "lightcraft", "filmcraft", "effectcraft"];
 const apps = () => {
   const names = settings().get("apps");
@@ -67,6 +81,7 @@ const authHeader = () => ({ authorization: `Bearer ${token()}` });
 
 export async function activate(context) {
   log = vscode.window.createOutputChannel("Craft apps", { log: true });
+  secrets = context.secrets;
   changed = new vscode.EventEmitter();
   definitionsChanged = new vscode.EventEmitter();
   context.subscriptions.push(log, changed, definitionsChanged);
@@ -121,6 +136,7 @@ export async function activate(context) {
     }),
     vscode.commands.registerCommand("craft.newMcpToken", newToken),
     vscode.commands.registerCommand("craft.setMcpUrl", setMcpUrl),
+    vscode.commands.registerCommand("craft.setRelayToken", setRelayToken),
     // Explorer › right-click › Open in a Craft App (one file or the selection).
     vscode.commands.registerCommand("craft.openInApp", async (uri, selected) => {
       const list = (Array.isArray(selected) && selected.length ? selected : uri ? [uri] : []).map((u) => u.toString());
@@ -134,7 +150,7 @@ export async function activate(context) {
     vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
       deserializeWebviewPanel: async (panel, state) => {
         const app = state?.app;
-        if (typeof app === "string" && hubUrl()) setup(panel, app);
+        if (typeof app === "string" && appTemplate()) await setup(panel, app);
         else panel.dispose();
       },
     }),
@@ -150,6 +166,7 @@ export async function activate(context) {
   watchAgents(context);
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration("craft.workspaceFiles") && lendAgain()),
+    vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration("craft.relayUrl") && sessions.clear()),
     vscode.workspace.onDidGrantWorkspaceTrust(lendAgain),
     vscode.workspace.onDidChangeWorkspaceFolders(lendAgain),
   );
@@ -331,26 +348,42 @@ async function pick() {
 }
 
 async function open(app, fromAgent) {
-  if (!hubUrl()) {
-    const url = await vscode.window.showInputBox({ prompt: "The craft-web-gateway address", placeHolder: "https://craft.example.com", ignoreFocusOut: true });
+  if (!appTemplate()) {
+    const url = await vscode.window.showInputBox({
+      prompt: "Where the craft apps are: an address with {app} for the app's name, or one that serves every app under /<app>/",
+      placeHolder: "https://{app}.example.com/", ignoreFocusOut: true,
+      validateInput: (v) => { try { appAddress(v, "photocraft"); return null; } catch (e) { return e.message; } },
+    });
     if (!url) return;
-    await settings().update("hubUrl", url, vscode.ConfigurationTarget.Global);
+    await settings().update("appUrl", url.trim(), vscode.ConfigurationTarget.Global);
   }
   const existing = panels.get(app);
   if (existing) return existing.reveal(undefined, fromAgent);
   const panel = vscode.window.createWebviewPanel(VIEW_TYPE, titleOf(app), { viewColumn: vscode.ViewColumn.Active, preserveFocus: fromAgent }, {
     enableScripts: true, retainContextWhenHidden: true,
   });
-  setup(panel, app);
+  await setup(panel, app);
 }
 
-function setup(panel, app) {
+async function setup(panel, app) {
   panels.get(app)?.dispose();
   panels.set(app, panel);
   panel.title = titleOf(app);
   panel.iconPath = vscode.Uri.joinPath(vscode.extensions.getExtension("hayone1.craft-vscode").extensionUri, "media", "app.svg");
   panel.webview.options = { enableScripts: true };
-  panel.webview.html = page(app);
+  panel.onDidDispose(() => {
+    if (panels.get(app) !== panel) return;
+    panels.delete(app);
+    tabChanged(app, null);
+  });
+  const show = async () => {
+    try {
+      const session = await relaySession(app);
+      panel.webview.html = page(app, session);
+    } catch (e) {
+      panel.webview.html = problem(app, e.message);
+    }
+  };
   panel.webview.onDidReceiveMessage(async (m) => {
     if (m?.type === "craft-embed:files") {
       const reply = await files(unpackBytes(m));
@@ -358,38 +391,71 @@ function setup(panel, app) {
       try { await panel.webview.postMessage(packBytes(reply)); } catch {} // the panel closed meanwhile
       return;
     }
-    if (m?.type === "craft-hub:session") flushFiles(app, panel);
-    if (m?.type === "craft-hub:session") {
+    if (m?.type === "craft-embed:session") {
+      flushFiles(app, panel);
       const tab = typeof m.mcp === "string" && /^https:\/\/|^http:\/\//.test(m.mcp)
         ? { mcp: m.mcp, state: String(m.state ?? "off"), title: String(m.title ?? titleOf(app)) } : null;
-      log.info(`${app}: ${m.state}${tab ? "" : " (no connection)"}`);
+      log.info(`${app}: ${m.state}${tab ? "" : " (no connection)"}${typeof m.error === "string" ? `: ${m.error}` : ""}`);
       tabChanged(app, tab);
+    } else if (m?.type === "craft-embed:refused") {
+      log.warn(`${app}: the app page doesn't take this editor; add ${String(m.origin)} to EMBED_ORIGINS on the app's server`);
     } else if (m?.type === "signin") signIn(app);
-    else if (m?.type === "reload") panel.webview.html = page(app);
+    else if (m?.type === "reload") await show();
   });
-  panel.onDidDispose(() => {
-    if (panels.get(app) !== panel) return;
-    panels.delete(app);
-    tabChanged(app, null);
+  await show();
+}
+
+// This window's relay connection for the app, when craft.relayUrl and a relay token are set.
+const sessions = new Sessions({
+  mint: async (app) => mintSession({ fetch: httpFetch, relay: relayUrl(), token: await relayToken(), app }),
+});
+const relayWarned = new Set();
+async function relaySession(app) {
+  if (!relayUrl() || !(await relayToken())) return null;
+  try {
+    return await sessions.get(app);
+  } catch (e) {
+    log.warn(`${app}: no relay connection from ${relayUrl()}: ${e.message}`);
+    if (!relayWarned.has(e.message)) vscode.window.showWarningMessage(`Craft apps: ${e.message}. The app page will ask its own server instead.`);
+    relayWarned.add(e.message);
+    return null;
+  }
+}
+
+async function setRelayToken() {
+  if (process.env.CRAFT_RELAY_TOKEN) {
+    vscode.window.showInformationMessage("Craft apps: the relay token comes from CRAFT_RELAY_TOKEN. Change it there and restart the editor.");
+    return;
+  }
+  const value = await vscode.window.showInputBox({
+    prompt: "A relay token: one of craft-mcp's MINT_TOKENS. Leave it empty to remove the saved token.", password: true, ignoreFocusOut: true,
   });
+  if (value === undefined) return;
+  if (value.trim()) await secrets.store(RELAY_SECRET, value.trim());
+  else await secrets.delete(RELAY_SECRET);
+  sessions.clear();
+  relayWarned.clear();
+  if (value.trim() && !relayUrl()) vscode.window.showInformationMessage("Craft apps: saved. Set craft.relayUrl to craft-mcp's address too.");
 }
 
 const active = () => [...panels.values()].find((p) => p.active);
 const activeApp = () => [...panels.entries()].find(([, p]) => p.active)?.[0];
 
 async function signIn(app) {
-  if (!hubUrl()) return;
-  await vscode.env.openExternal(vscode.Uri.parse(`${hubUrl()}/${app ? `${app}/` : ""}`));
-  const reload = await vscode.window.showInformationMessage("Sign in to the hub in the browser tab that opened, then come back and reload the app.", "Reload");
+  let url;
+  try { url = appUrl(app ?? apps()[0]?.name ?? "photocraft"); } catch { return; }
+  if (!url) return;
+  await vscode.env.openExternal(vscode.Uri.parse(url.href));
+  const reload = await vscode.window.showInformationMessage("Sign in to the app in the browser tab that opened, then come back and reload the app.", "Reload");
   if (reload) for (const p of panels.values()) p.webview.postMessage({ type: "reload" });
 }
 
-// For a hub without EMBED_ORIGINS: paste the URL from the overlay's Connect tab.
+// For an app page that can't answer the panel: paste the URL from the app's AI assistant panel.
 async function setMcpUrl() {
   const app = activeApp() ?? (await pick());
   if (!app) return;
   const url = await vscode.window.showInputBox({
-    prompt: `${titleOf(app)}'s MCP URL, from the Connect tab of the app's AI chat (the round ✦ button)`, ignoreFocusOut: true,
+    prompt: `${titleOf(app)}'s MCP URL, from the app's AI assistant panel (open the app in a browser tab)`, ignoreFocusOut: true,
     validateInput: (v) => (/^https?:\/\/.+\/mcp$/.test(v.trim()) ? null : "A URL that ends in /mcp"),
   });
   if (url) tabChanged(app, { mcp: url.trim(), state: "on", title: titleOf(app) });
@@ -406,15 +472,27 @@ function item(a) {
   return t;
 }
 
-function page(app) {
-  const hub = new URL(hubUrl());
-  const lend = lending();
-  const src = new URL(`${hub.pathname.replace(/\/$/, "")}/${app}/`, hub).href;
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+// The app's address can't be used: say so in the panel.
+function problem(app, message) {
   const nonce = randomBytes(16).toString("base64");
-  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   return `<!doctype html>
 <html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${esc(hub.origin)}; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}';">
+<style nonce="${nonce}">body { margin: 24px; color: #ddd; background: #1c1c1c; font: 13px/1.5 var(--vscode-font-family, system-ui); }</style></head>
+<body><p>${esc(titleOf(app))} can't open: ${esc(message)}</p>
+<p>Set <code>craft.appUrl</code> (or <code>CRAFT_APP_URL</code>) to where the apps are, for example <code>https://{app}.example.com/</code>.</p></body></html>`;
+}
+
+function page(app, session) {
+  const src = appUrl(app);
+  const lend = lending();
+  const nonce = randomBytes(16).toString("base64");
+  const json = (v) => JSON.stringify(v).replace(/</g, "\\u003c");
+  return `<!doctype html>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${esc(src.origin)}; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
 <style nonce="${nonce}">
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #1c1c1c; }
   iframe { display: block; border: 0; width: 100%; height: 100%; }
@@ -426,18 +504,23 @@ function page(app) {
   button.plain { background: transparent; color: #ccc; }
 </style></head>
 <body>
-<iframe id="app" src="${esc(src)}" allow="clipboard-read; clipboard-write; fullscreen; autoplay; microphone; camera; display-capture"></iframe>
-<div id="note" hidden><span>No word from ${esc(titleOf(app))} yet. If the hub asks you to sign in and the page stays blank, sign in in a browser tab.</span>
+<iframe id="app" src="${esc(src.href)}" allow="clipboard-read; clipboard-write; fullscreen; autoplay; microphone; camera; display-capture"></iframe>
+<div id="note" hidden><span id="text"></span>
   <button id="signin">Sign in</button><button id="reload" class="plain">Reload</button><button id="hide" class="plain">Hide</button></div>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
-  vscode.setState({ app: ${JSON.stringify(app)} });
-  const HUB = ${JSON.stringify(hub.origin)};
+  vscode.setState({ app: ${json(app)} });
+  const APP = ${json(src.origin)};
+  const TITLE = ${json(titleOf(app))};
   const frame = document.getElementById("app");
   const note = document.getElementById("note");
+  const text = document.getElementById("text");
   let heard = false, loop, waited = 0;
-  let FILES = ${JSON.stringify(lend).replace(/</g, "\\u003c")};
-  let hubFiles = true; // the hub can turn the lending off (EMBED_FILES=false)
+  let FILES = ${json(lend)};
+  // This window's relay connection for the page, or null: the page then asks its own server.
+  const SESSION = ${json(session ?? null)};
+  let appFiles = true; // the app's server can turn the lending off (EMBED_FILES=false)
+  const say = (s) => { text.textContent = s; note.hidden = false; };
   // File bytes cross to the extension as base64: some hosts (code-server) send messages as JSON,
   // which would turn bytes into long lists of numbers or a Node Buffer's JSON form.
   const pack = (v) => {
@@ -462,35 +545,49 @@ function page(app) {
     if (v && typeof v === "object") { const o = {}; for (const k of Object.keys(v)) o[k] = unpack(v[k]); return o; }
     return v;
   };
-  const hello = () => frame.contentWindow && frame.contentWindow.postMessage({ type: "craft-embed:hello", files: FILES }, HUB);
+  const hello = () => frame.contentWindow && frame.contentWindow.postMessage({ type: "craft-embed:hello", files: FILES, session: SESSION }, APP);
+  let answers = ""; // the name the page answers with
   frame.addEventListener("load", () => {
-    heard = false; waited = 0; clearInterval(loop); hello();
+    heard = false; waited = 0; answers = ""; clearInterval(loop); hello();
     loop = setInterval(() => {
       if (heard) return clearInterval(loop);
       hello();
-      if (++waited === 25) note.hidden = false;
+      if (++waited === 25) {
+        say("No word from " + TITLE + " yet. If the app asks you to sign in and the page stays blank, sign in in a browser tab. "
+          + "If the app shows but this stays, the app needs the remote image (hayone/<app>:remote) from November 2026 or later.");
+      }
     }, 1000);
   });
   window.addEventListener("message", (e) => {
     if (e.source === frame.contentWindow) {
-      if (e.origin !== HUB || !e.data) return;
-      if (e.data.type === "craft-embed:files" && FILES && hubFiles) return vscode.postMessage(pack(e.data));
-      if (e.data.type !== "craft-hub:session") return;
-      heard = true; note.hidden = true;
-      hubFiles = e.data.files !== false;
-      vscode.postMessage(e.data);
+      if (e.origin !== APP || !e.data) return;
+      if (e.data.type === "craft-embed:files" && FILES && appFiles) return vscode.postMessage(pack(e.data));
+      if (e.data.type === "craft-embed:refused") {
+        heard = true;
+        say(TITLE + " doesn't take files or the agent from this editor. Add " + e.data.origin + " to EMBED_ORIGINS on the app's server, then reload.");
+        return vscode.postMessage({ type: e.data.type, origin: String(e.data.origin) });
+      }
+      // "craft-hub:session" is the same answer from a page behind craft-web-gateway before
+      // November 2026, whose overlay answered the editor. Newer pages send both names.
+      if (e.data.type === "craft-embed:session") answers = "craft-embed:session";
+      else if (e.data.type !== "craft-hub:session" || answers === "craft-embed:session") return;
+      heard = true;
+      if (e.data.mcp) note.hidden = true;
+      else if (e.data.error) say(e.data.error + ". Give the editor a relay (craft.relayUrl and a relay token), or have the app's server forward _assistant/session to craft-mcp.");
+      appFiles = e.data.files !== false;
+      vscode.postMessage({ ...e.data, type: "craft-embed:session" });
     } else if (e.data && e.data.type === "craft-embed:files-reply") {
-      frame.contentWindow && frame.contentWindow.postMessage(unpack(e.data), HUB);
+      frame.contentWindow && frame.contentWindow.postMessage(unpack(e.data), APP);
     } else if (e.data && e.data.type === "craft-embed:open-files") {
-      frame.contentWindow && frame.contentWindow.postMessage(unpack(e.data), HUB);
+      frame.contentWindow && frame.contentWindow.postMessage(unpack(e.data), APP);
     } else if (e.data && e.data.type === "craft-embed:lend") {
       FILES = e.data.files; hello();
     } else if (e.data && e.data.type === "reload") {
-      frame.src = frame.src;
+      vscode.postMessage({ type: "reload" });
     }
   });
   document.getElementById("signin").onclick = () => vscode.postMessage({ type: "signin" });
-  document.getElementById("reload").onclick = () => { frame.src = frame.src; };
+  document.getElementById("reload").onclick = () => vscode.postMessage({ type: "reload" });
   document.getElementById("hide").onclick = () => { note.hidden = true; };
 </script>
 </body></html>`;

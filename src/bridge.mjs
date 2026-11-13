@@ -1,5 +1,5 @@
 // One local MCP server ("craft") for every craft app open in this editor. Each app panel reports
-// its tab's relay MCP URL (craft-mcp, through craft-web-gateway); the bridge keeps an MCP client to
+// its tab's relay MCP URL (craft-mcp); the bridge keeps an MCP client to
 // each and offers their tools as <app>_<tool>, plus three tools that always exist:
 //
 //   craft_apps   which apps there are, and which are open and connected
@@ -28,7 +28,7 @@ import {
   CallToolRequestSchema, ListToolsRequestSchema, ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 // The relay gives a tab 120 s per request; a long tool call can report progress and go on.
 const CALL_TIMEOUT_MS = 10 * 60_000;
 const OPEN_TIMEOUT_MS = 90_000;
@@ -318,7 +318,7 @@ export class Bridge {
     if (!ok) {
       return text(tab
         ? `${known.title} is open but not connected yet (${tab.error ?? tab.state}). If the panel asks the user to sign in, they need to do that first.`
-        : `${known.title} is open, but it hasn't connected. The user may need to sign in to the hub in the panel.`, true);
+        : `${known.title} is open, but it hasn't connected. The user may need to sign in to the app in the panel.`, true);
     }
     return text(`${known.title} is open and connected. Its tools (also offered directly as ${app}_<tool>):\n` +
       tab.tools.map((t) => `- ${t.name}: ${t.description ?? ""}`).join("\n"));
