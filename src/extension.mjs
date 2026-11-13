@@ -177,7 +177,7 @@ async function serve(context) {
     focusedAt = Date.now();
     if (follower) report();
   }));
-  bridge = new Bridge({ apps, open: route, token, refreshToken: loadToken, log: (s) => log.info(s) });
+  bridge = new Bridge({ apps, open: route, token, refreshToken: loadToken, log: (s) => log.info(s), focusedAt: () => focusedAt });
   context.subscriptions.push({ dispose: () => bridge.close() });
   try {
     await bridge.listen(port());

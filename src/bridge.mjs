@@ -20,7 +20,7 @@ import {
   CallToolRequestSchema, ListToolsRequestSchema, ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-const VERSION = "0.3.3";
+const VERSION = "0.3.4";
 // The relay gives a tab 120 s per request; a long tool call can report progress and go on.
 const CALL_TIMEOUT_MS = 10 * 60_000;
 const OPEN_TIMEOUT_MS = 90_000;
@@ -66,6 +66,7 @@ export class Bridge {
    *   token?: () => string,          the bearer token every request but /healthz must carry; none: no check
    *   refreshToken?: () => void,     reloads the token (another window may have made a new one)
    *   log?: (s: string) => void,
+   *   focusedAt?: () => number,      when this window was last focused (ms), to pick between windows
    * }} host
    */
   constructor(host) {
@@ -76,13 +77,23 @@ export class Bridge {
     this.sessions = new Map(); // MCP session id -> { server, transport }
     this.waiters = new Set();
     this.remotes = new Map(); // other windows: id -> {tabs, focusedAt, queue, polls, timer}
+    this.owners = new Map(); // app -> the window whose tab it is: "" for this one, else its id
   }
 
   // ---- what the panels report -----------------------------------------------------------
-  /** A panel's tab: its relay MCP URL and connection state ("on", "connecting", "off", …). */
-  update(app, { mcp, state, title }) {
+  /**
+   * A panel's tab: its relay MCP URL and connection state ("on", "connecting", "off", …), from
+   * this window ("") or another one (its id). When two windows have the app open, the tab of the
+   * window focused last counts. code-server keeps a window's extension host running for hours
+   * after its browser tab is gone, and that window goes on reporting a panel that no longer
+   * exists; without this rule the two tabs took turns, and every other call found no tab.
+   */
+  update(app, { mcp, state, title }, from = "") {
+    if (!mcp) return this.remove(app, from);
+    const owner = this.owners.get(app);
+    if (owner !== undefined && owner !== from && this.tabs.has(app) && this.#focus(from) < this.#focus(owner)) return;
+    this.owners.set(app, from);
     const old = this.tabs.get(app);
-    if (!mcp) return this.remove(app);
     if (old && old.mcp === mcp) {
       if (old.state === state && (title ?? old.title) === old.title) return;
       const wasOn = old.state === "on";
@@ -103,16 +114,21 @@ export class Bridge {
   // until that window stops reporting (it reports every 15 s, and whenever something changes).
   #remote({ window: from, tabs = {}, focusedAt = 0 }) {
     const w = this.remotes.get(from) ?? { queue: [], polls: new Set(), tabs: {} };
-    for (const app of Object.keys(w.tabs)) if (!(app in tabs)) this.remove(app);
-    for (const [app, tab] of Object.entries(tabs)) this.update(app, tab);
+    Object.assign(w, { tabs, focusedAt: Number(focusedAt) || 0 });
+    this.remotes.set(from, w);
+    for (const [app, owner] of [...this.owners]) if (owner === from && !(app in tabs)) this.remove(app, from);
+    for (const [app, tab] of Object.entries(tabs)) this.update(app, tab, from);
     clearTimeout(w.timer);
     w.timer = setTimeout(() => {
       this.remotes.delete(from);
-      for (const app of Object.keys(w.tabs)) this.remove(app);
+      for (const [app, owner] of [...this.owners]) if (owner === from) this.remove(app, from);
     }, 45_000);
     w.timer.unref?.();
-    Object.assign(w, { tabs, focusedAt: Number(focusedAt) || 0 });
-    this.remotes.set(from, w);
+  }
+
+  // When a window ("" for this one) was last focused.
+  #focus(id) {
+    return id === "" ? Number(this.host.focusedAt?.()) || 0 : this.remotes.get(id)?.focusedAt ?? 0;
   }
 
   /** The other windows that report here: [{id, focusedAt, apps}]. */
@@ -143,8 +159,12 @@ export class Bridge {
     w.polls.add(answer);
   }
 
-  remove(app) {
+  /** Takes the app's tab away, if it is the tab of window `from` ("" for this one). */
+  remove(app, from = "") {
     const tab = this.tabs.get(app);
+    const owner = this.owners.get(app);
+    if (owner !== undefined && owner !== from) return;
+    this.owners.delete(app);
     if (!tab) return;
     this.tabs.delete(app);
     this.#close(tab);

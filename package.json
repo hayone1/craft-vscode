@@ -2,7 +2,7 @@
   "name": "craft-vscode",
   "displayName": "Craft Apps",
   "description": "Open the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) from a craft-web-gateway in editor panels, and let Claude Code, Codex, Gemini CLI or VS Code chat drive them over one local MCP server.",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "publisher": "hayone1",
   "license": "MIT",
   "repository": {
