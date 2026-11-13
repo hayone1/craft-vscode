@@ -1,11 +1,10 @@
 // Where each app is, and the relay connection a panel hands to its app page. No vscode import, so
 // the tests can run it in plain Node.
 //
-// The panel frames the app's own address: the hayone/<app>:remote image, or anything that serves
-// it (a proxy, craft-web-gateway's /<app>/). The page answers the panel's hello itself
+// The panel frames the app's own address (the hayone/<app>:remote image, or anything that serves
+// it), or the extension's local proxy for it (proxy.mjs). The page answers the panel's hello itself
 // (craft-embed.js in the image). It needs a relay connection for the agent: the panel makes one
-// with the relay's mint token (craft.relayUrl and CRAFT_RELAY_TOKEN), else the page asks its own
-// server (_assistant/session, which the proxy in front of the apps forwards to craft-mcp).
+// with the relay's mint token (craft.relayUrl and CRAFT_RELAY_TOKEN).
 
 /**
  * The app's address. A `{app}` in the template stands for the app's name:

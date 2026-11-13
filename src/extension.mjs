@@ -1,6 +1,8 @@
 // Craft apps in VS Code: each app opens in an editor panel (the app's own page, from the
 // hayone/<app>:remote images, in a webview's iframe), and one local MCP server (bridge.mjs) lets
-// Claude Code, or any MCP client in this workspace, drive the apps that are open.
+// Claude Code, or any MCP client in this workspace, drive the apps that are open. An app at an
+// address the browser can't use (internal, or plain http) is served through a local proxy on a
+// port the editor forwards (proxy.mjs).
 //
 // The panel learns its tab's MCP URL from the app page (craft-embed.js in the images; the page's
 // server lists the editor's origin in EMBED_ORIGINS): the webview says "craft-embed:hello" to the
@@ -17,6 +19,7 @@ import { AGENTS, syncAgents } from "./agents.mjs";
 import { Bridge } from "./bridge.mjs";
 import { Sessions, appAddress, mintSession } from "./embed.mjs";
 import { realWhere, workspaceFiles } from "./files.mjs";
+import { AppProxy, framedAddress, needsProxy, probe } from "./proxy.mjs";
 import { resolveToken, rotateToken, tokenFile } from "./token.mjs";
 
 const CATALOG = {
@@ -35,7 +38,7 @@ const appTemplate = () => String(settings().get("appUrl") || process.env.CRAFT_A
   || settings().get("hubUrl") || process.env.CRAFT_HUB_URL || "").trim();
 const appUrl = (app) => appAddress(appTemplate(), app);
 // craft-mcp's public address and a token from its MINT_TOKENS: the panel makes its tab's relay
-// connection itself. Without them, the app page asks its own server for one.
+// connection itself. Without them, the panel lends its files but no agent drives the app.
 const relayUrl = () => String(settings().get("relayUrl") || process.env.CRAFT_RELAY_URL || "").trim().replace(/\/+$/, "");
 const RELAY_SECRET = "craft.relayToken";
 let secrets;
@@ -175,7 +178,60 @@ export async function activate(context) {
 
 export async function deactivate() {
   clearInterval(follower?.timer);
+  for (const p of proxies.values()) { clearInterval(p.retry); p.proxy.close(); }
+  proxies.clear();
   await bridge?.close();
+}
+
+// ---- the local proxy for apps the browser can't reach ----------------------------------------
+// One port per app, the same in every window (craft.proxyPort plus the app's place in the
+// catalog), so the app keeps one origin and its saved settings. A second window with the same
+// app uses the first window's proxy, and takes the port over when that window closes.
+/** @type {Map<string, {proxy: AppProxy, upstream: string, port: number, retry?: any}>} */
+const proxies = new Map();
+const proxyMode = () => String(settings().get("appProxy") || "auto");
+const proxyPort = (app, attempt) => {
+  const base = Number(settings().get("proxyPort")) || 47820;
+  const known = Object.keys(CATALOG).indexOf(app);
+  const slot = known >= 0 ? known : 20 + ([...app].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 0) % 40);
+  return base + slot + attempt * 100;
+};
+
+async function proxied(app, url) {
+  const have = proxies.get(app);
+  if (have?.upstream === url.origin) return have.port;
+  if (have) { clearInterval(have.retry); have.proxy.close(); proxies.delete(app); }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const port = proxyPort(app, attempt);
+    const proxy = new AppProxy({ upstream: url, port });
+    try {
+      await proxy.listen();
+      proxies.set(app, { proxy, upstream: url.origin, port });
+      log.info(`${app}: ${url.origin} on http://localhost:${port}`);
+      return port;
+    } catch (e) {
+      if (e.code !== "EADDRINUSE") throw new Error(`couldn't serve ${url.origin} on port ${port}: ${e.message}`);
+      const other = await probe({ fetch: httpFetch, port, upstream: url });
+      if (other !== "same") continue; // something else has the port: try the next one
+      // Another window serves this app: use its proxy, and take the port over when it closes.
+      const entry = { proxy, upstream: url.origin, port };
+      entry.retry = setInterval(async () => {
+        try { await proxy.listen(); clearInterval(entry.retry); log.info(`${app}: took over port ${port}`); } catch {}
+      }, 15_000);
+      proxies.set(app, entry);
+      return port;
+    }
+  }
+  throw new Error(`no free port for ${app}'s local proxy near ${proxyPort(app, 0)} (craft.proxyPort)`);
+}
+
+// The address the panel frames: the app's own, or its local proxy's address as the browser sees it.
+async function frameAddress(app) {
+  const url = appUrl(app);
+  if (!needsProxy(url, proxyMode())) return url;
+  const port = await proxied(app, url);
+  const external = await vscode.env.asExternalUri(vscode.Uri.parse(`http://localhost:${port}/`));
+  return framedAddress(external.toString(true), url);
 }
 
 // ---- the MCP server --------------------------------------------------------------------------
@@ -378,8 +434,9 @@ async function setup(panel, app) {
   });
   const show = async () => {
     try {
+      const src = await frameAddress(app);
       const session = await relaySession(app);
-      panel.webview.html = page(app, session);
+      panel.webview.html = page(app, session, src);
     } catch (e) {
       panel.webview.html = problem(app, e.message);
     }
@@ -416,7 +473,7 @@ async function relaySession(app) {
     return await sessions.get(app);
   } catch (e) {
     log.warn(`${app}: no relay connection from ${relayUrl()}: ${e.message}`);
-    if (!relayWarned.has(e.message)) vscode.window.showWarningMessage(`Craft apps: ${e.message}. The app page will ask its own server instead.`);
+    if (!relayWarned.has(e.message)) vscode.window.showWarningMessage(`Craft apps: ${e.message}. The app opens, but no agent can drive it.`);
     relayWarned.add(e.message);
     return null;
   }
@@ -485,8 +542,7 @@ function problem(app, message) {
 <p>Set <code>craft.appUrl</code> (or <code>CRAFT_APP_URL</code>) to where the apps are, for example <code>https://{app}.example.com/</code>.</p></body></html>`;
 }
 
-function page(app, session) {
-  const src = appUrl(app);
+function page(app, session, src) {
   const lend = lending();
   const nonce = randomBytes(16).toString("base64");
   const json = (v) => JSON.stringify(v).replace(/</g, "\\u003c");
@@ -517,7 +573,7 @@ function page(app, session) {
   const text = document.getElementById("text");
   let heard = false, loop, waited = 0;
   let FILES = ${json(lend)};
-  // This window's relay connection for the page, or null: the page then asks its own server.
+  // This window's relay connection for the page, or null: then no agent drives the app.
   const SESSION = ${json(session ?? null)};
   let appFiles = true; // the app's server can turn the lending off (EMBED_FILES=false)
   const say = (s) => { text.textContent = s; note.hidden = false; };
@@ -568,12 +624,12 @@ function page(app, session) {
         return vscode.postMessage({ type: e.data.type, origin: String(e.data.origin) });
       }
       // "craft-hub:session" is the same answer from a page behind craft-web-gateway before
-      // November 2026, whose overlay answered the editor. Newer pages send both names.
+      // November 2026, whose overlay answered the editor.
       if (e.data.type === "craft-embed:session") answers = "craft-embed:session";
       else if (e.data.type !== "craft-hub:session" || answers === "craft-embed:session") return;
       heard = true;
       if (e.data.mcp) note.hidden = true;
-      else if (e.data.error) say(e.data.error + ". Give the editor a relay (craft.relayUrl and a relay token), or have the app's server forward _assistant/session to craft-mcp.");
+      else if (e.data.error) say(e.data.error + ". Give the editor a relay (craft.relayUrl and a relay token).");
       appFiles = e.data.files !== false;
       vscode.postMessage({ ...e.data, type: "craft-embed:session" });
     } else if (e.data && e.data.type === "craft-embed:files-reply") {

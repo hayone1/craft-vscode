@@ -91,51 +91,71 @@ browser tab (code-server)
 
 ## What the apps need
 
-The extension needs three things: the app pages, the relay, and a way to get a relay connection
-for each panel. You don't need craft-web-gateway. The gateway is a separate product with its own
-launcher and chat, and the extension doesn't use it.
+The extension needs three things: the app pages, the relay, and a relay token. You don't need
+craft-web-gateway. The gateway is a separate product for people who open the apps in a browser
+tab, with its own launcher, chat and cloud storage, and the extension doesn't use it.
 
 1. **Run the app images.** Run `hayone/<app>:remote` for each app, for example
-   `hayone/photocraft:remote`. Each image serves its app on port 8080. Give each app an address
-   that the editor's browser can reach, such as `https://photocraft.example.com/`.
-2. **Let the editor frame the apps.** Set `EMBED_ORIGINS` on every app container to the origin
-   that your editor serves webviews from. For code-server behind Coder, that is the origin of the
-   workspace apps, for example `EMBED_ORIGINS=https://*.code.example.com`. A `*` stands for one or
-   more parts of the host name. VS Code on the desktop needs no entry, because the apps always
-   allow VS Code's own webviews.
+   `hayone/photocraft:remote`. Each image serves its app on port 8080. The extension needs an
+   address for each app that the machine running the extension can reach. That machine is the
+   workspace for code-server and other remote setups, and your computer for desktop VS Code. An
+   internal address works, such as a Kubernetes Service
+   `http://craft-app-photocraft.apps.svc.cluster.local:8080/`. The next section explains how the
+   browser still gets to the app.
+2. **Let the editor frame the apps.** Set `EMBED_ORIGINS` on every app container to the origins
+   that your editor serves webviews from, separated by commas. A `*` stands for one or more parts
+   of the host name. For code-server behind Coder, that is the origin of the workspace apps, for
+   example `https://*.code.example.com`. For VS Code on the desktop, add `vscode-webview://*`. The
+   app page answers no editor whose origin is missing from the list.
 3. **Run the relay.** Run `hayone/craft-mcp` with `MCP_KEY` (a secret of at least 16 characters)
-   and `PUBLIC_HOST` (the relay's public address, for example `craft-mcp.example.com`).
-4. **Give each panel a relay connection.** Pick one of the two ways below.
-   - **The editor asks the relay.** Set `MINT_TOKENS` on craft-mcp to one or more random tokens
-     of at least 16 characters, separated by commas. In the editor, set `craft.relayUrl` to the
-     relay's address and give the editor one of the tokens: set `CRAFT_RELAY_TOKEN`, or run
-     **Craft: Set the Relay Token**. A mint token can only make relay connections. The token
-     can't read cloud storage or act as the proxy in front of the apps.
-   - **The app's server asks the relay.** A proxy in front of the apps forwards
-     `POST /_assistant/session` to craft-mcp's `/mint` and adds the header
-     `X-Gateway-Secret: <MCP_KEY>`. The proxy can also sign people in first. The app's own **AI
-     assistant** button in a browser tab uses the same route.
+   and `PUBLIC_HOST` (the relay's public address, for example `craft-mcp.example.com`). Set
+   `MINT_TOKENS` on craft-mcp to one or more random tokens of at least 16 characters, separated
+   by commas.
+4. **Give the editor the relay and a token.** Set `craft.relayUrl` (or `CRAFT_RELAY_URL`) to the
+   relay's address. Give the editor one of the mint tokens: set `CRAFT_RELAY_TOKEN`, or run
+   **Craft: Set the Relay Token**. A mint token can only make relay connections. Without a relay,
+   the panels still open and lend the workspace files, but no agent can drive the apps.
 5. **Tell the extension where the apps are.** Set `craft.appUrl`, or `CRAFT_APP_URL` in the
    workspace's environment, to an address with `{app}` in it, for example
-   `https://{app}.example.com/`. An address without `{app}` serves every app under `/<app>/`, so
-   `https://craft.example.com` opens PhotoCraft at `https://craft.example.com/photocraft/`.
+   `http://craft-app-{app}.apps.svc.cluster.local:8080/` or `https://{app}.example.com/`. An
+   address without `{app}` serves every app under `/<app>/`, so `https://craft.example.com` opens
+   PhotoCraft at `https://craft.example.com/photocraft/`.
+
+## Apps at an internal address
+
+The panel's page is loaded by your browser, not by the workspace. An internal address, or any
+plain `http://` address in an `https://` editor, can't be loaded there. For such an address, the
+extension serves the app through a small proxy on a local port of the machine that runs the
+extension, and asks the editor for the browser's way to that port (`vscode.env.asExternalUri`).
+
+- On the desktop, the address is `http://localhost:<port>/`.
+- In code-server behind Coder, the address is the workspace's port address, for example
+  `https://47820--main--dev--alice.code.example.com/`. Coder's own sign-in protects that address,
+  so the apps need no sign-in of their own.
+- In other remote setups, the editor's port forwarding gives the address.
+
+The setting `craft.appProxy` decides when the proxy is used: `auto` (the default) for `http://`
+addresses, `always`, or `never`. Each app gets the same port every time, `craft.proxyPort`
+(47820) plus the app's place in the extension's app list, so the app keeps one origin and its
+saved settings. A second editor window with the same app uses the first window's proxy, and takes
+the port over when the first window closes.
 
 ## How a panel gets connected
 
-The panel shows the app's page, for example `https://photocraft.example.com/`, in an iframe. The
-extension's part of the panel sends the page a `craft-embed:hello` message. The page answers its
-direct parent only, and only when the parent's origin is allowed (see step 2 above). When the
-editor has a relay connection for the panel, the hello carries the connection, and the page uses
-it. Otherwise the page asks its own server for one. The page then tells the panel the tab's MCP
-URL, and the extension keeps an MCP client to that URL. Nothing is copied by hand.
+The panel shows the app's page in an iframe. The extension's part of the panel sends the page a
+`craft-embed:hello` message. The page answers its direct parent only, and only when the parent's
+origin is allowed (see step 2 above). The hello carries the panel's relay connection, which the
+extension made with the relay token, and the page connects to the relay with it. The page then
+tells the panel the tab's MCP URL, and the extension keeps an MCP client to that URL. Nothing is
+copied by hand.
 
 Each editor window makes its own relay connection for each app. Two windows with the same app
 open therefore don't take each other's connection over.
 
 When something is missing, the panel says what it is. A page that doesn't allow the editor names
-the origin to add to `EMBED_ORIGINS`. A page without a relay connection says so too. As a last
-resort, open the app in a browser tab, press its **AI assistant** button, copy the URL, and run
-**Craft: Set an App's MCP URL by Hand**.
+the origin to add to `EMBED_ORIGINS`. A page without a relay connection says so too.
+**Craft: Set an App's MCP URL by Hand** takes a tab's MCP URL from somewhere else, for example from
+craft-web-gateway's Connect tab.
 
 ## Workspace files
 
