@@ -6,6 +6,14 @@
 //   craft_open   open an app in the editor and wait until it is connected
 //   craft_call   call any tool of an open app (for clients that miss tools/list_changed)
 //
+// and three that move files between the workspace and an open app. The apps run in a browser
+// tab, so the bytes go through the relay's files endpoint (craft-mcp), which hands them to the
+// tab's page (craft-files.js in the app images):
+//
+//   craft_send_file   a workspace file into the app, as if the user dropped it there
+//   craft_app_files   the files the app saved, exported or rendered in its tab
+//   craft_get_file    one of those into the workspace
+//
 // No vscode import here, so the tests can run it in plain Node.
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
@@ -20,10 +28,15 @@ import {
   CallToolRequestSchema, ListToolsRequestSchema, ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-const VERSION = "0.3.4";
+const VERSION = "0.4.0";
 // The relay gives a tab 120 s per request; a long tool call can report progress and go on.
 const CALL_TIMEOUT_MS = 10 * 60_000;
 const OPEN_TIMEOUT_MS = 90_000;
+// Files move through the relay in parts of this size (base64 in JSON, under the relay's 24 MB).
+const FILE_PART = 4 << 20;
+const MAX_FILE = 200 << 20; // as files.mjs' MAX_BYTES
+const FILE_WAIT_S = 30;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const STATIC = [
   {
@@ -49,6 +62,44 @@ const STATIC = [
       required: ["app", "tool"],
     },
   },
+  {
+    name: "craft_send_file",
+    description: "Copy a file from the editor's workspace into an open craft app, as if the user dropped it on the app. " +
+      "PhotoCraft and VectorCraft open it, LightCraft adds the photo to its library, FilmCraft imports it into the project " +
+      "(a .fcproj opens as the project), EffectCraft adds it to its file table, opens (.ecproj) or imports it, and returns " +
+      "the path to name in EffectCraft's tools.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        app: { type: "string", description: "The app's name, e.g. filmcraft" },
+        path: { type: "string", description: "The file: an absolute path inside a workspace folder (e.g. /home/coder/project/media/clip.mp4), or a path relative to the first workspace folder" },
+      },
+      required: ["app", "path"],
+    },
+  },
+  {
+    name: "craft_app_files",
+    description: "List the files an open craft app has saved, exported or rendered in its browser tab (newest last), and " +
+      "the files FilmCraft and EffectCraft keep in their own file tables. Copy one into the workspace with craft_get_file.",
+    inputSchema: { type: "object", properties: { app: { type: "string", description: "The app's name" } }, required: ["app"] },
+  },
+  {
+    name: "craft_get_file",
+    description: "Copy a file that an open craft app saved, exported or rendered into the editor's workspace. The apps run " +
+      "in a browser, so first save or export with the app's own tool (any file name or path): the tab keeps the file, " +
+      "and this tool writes it where you say. Takes the newest file of that name. Waits up to `wait` seconds for the file " +
+      "to appear (a render may take a while).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        app: { type: "string", description: "The app's name" },
+        name: { type: "string", description: "The file's name as the app saved it (e.g. poster.png), or its path in craft_app_files" },
+        path: { type: "string", description: "Where to write it: an absolute path inside a workspace folder, or a path relative to the first workspace folder. An existing file is replaced." },
+        wait: { type: "number", description: `Seconds to wait for the file (default ${FILE_WAIT_S}, at most 600)` },
+      },
+      required: ["app", "name", "path"],
+    },
+  },
 ];
 
 // MCP clients (and the models behind them) accept [A-Za-z0-9_-]{1,64} for tool names.
@@ -67,6 +118,11 @@ export class Bridge {
    *   refreshToken?: () => void,     reloads the token (another window may have made a new one)
    *   log?: (s: string) => void,
    *   focusedAt?: () => number,      when this window was last focused (ms), to pick between windows
+   *   workspace?: {                  the workspace files an agent names (craft_send_file, craft_get_file)
+   *     read: (path: string) => Promise<{name: string, bytes: Uint8Array}>,
+   *     write: (path: string, bytes: Uint8Array) => Promise<{path: string}>,
+   *     check?: (path: string) => Promise<void>,   rejects a path write would refuse
+   *   },
    * }} host
    */
   constructor(host) {
@@ -228,6 +284,9 @@ export class Bridge {
     if (name === "craft_apps") return text(JSON.stringify(this.#status(), null, 2));
     if (name === "craft_open") return this.#open(String(args.app ?? ""));
     if (name === "craft_call") return this.#call(String(args.app ?? ""), String(args.tool ?? ""), args.arguments ?? {}, extra);
+    if (name === "craft_send_file") return this.#sendFile(String(args.app ?? ""), args.path, extra);
+    if (name === "craft_app_files") return text(JSON.stringify(await this.#tabFiles(String(args.app ?? ""), { op: "list" }, extra), null, 2));
+    if (name === "craft_get_file") return this.#getFile(String(args.app ?? ""), args.name, args.path, args.wait, extra);
     for (const [app, tab] of this.tabs) {
       const tool = tab.tools.find((t) => toolName(app, t.name) === name);
       if (tool) return this.#call(app, tool.name, args, extra);
@@ -284,6 +343,74 @@ export class Bridge {
     }
   }
 
+  // ---- files between the workspace and an app's tab ----------------------------------------
+  // One request to the tab's page through the relay's files endpoint: its result, or an Error.
+  async #tabFiles(app, params, extra = {}) {
+    const tab = this.tabs.get(app);
+    if (!tab) throw new Error(`${app || "That app"} isn't open. Call craft_open with app "${app}" first.`);
+    const url = tab.mcp.replace(/\/mcp\/?$/, "/files");
+    const res = await httpFetch(url, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(params), signal: extra.signal,
+    });
+    if (!res.ok) {
+      throw new Error(res.status === 404
+        ? `The relay doesn't take files for ${tab.title}: it may be older than this extension (craft-mcp needs the files endpoint), or the app's link has expired.`
+        : `The relay answered ${res.status}.`);
+    }
+    const reply = await res.json();
+    if (!reply?.ok) throw new Error(String(reply?.error ?? `${tab.title}'s tab refused.`));
+    return reply.result;
+  }
+
+  async #sendFile(app, path, extra) {
+    if (!this.host.workspace) return text("This editor can't read its workspace files.", true);
+    if (!this.tabs.has(app)) return text(`${app || "That app"} isn't open. Call craft_open with app "${app}" first.`, true);
+    const { name, bytes } = await this.host.workspace.read(String(path ?? ""));
+    const upload = randomUUID();
+    for (let at = 0; ; at += FILE_PART) {
+      const part = bytes.subarray(at, at + FILE_PART);
+      const done = at + FILE_PART >= bytes.byteLength;
+      const data = Buffer.from(part.buffer, part.byteOffset, part.byteLength).toString("base64");
+      const result = await this.#tabFiles(app, { op: "put", upload, name, data, done }, extra);
+      if (done) return text(JSON.stringify(result, null, 2));
+    }
+  }
+
+  async #getFile(app, name, path, wait = FILE_WAIT_S, extra = {}) {
+    if (!this.host.workspace) return text("This editor can't write its workspace files.", true);
+    if (typeof name !== "string" || !name) return text("Name the file to copy (craft_app_files lists them).", true);
+    if (typeof path !== "string" || !path) return text("Say where to write the file in the workspace.", true);
+    const tab = this.tabs.get(app);
+    if (!tab) return text(`${app || "That app"} isn't open. Call craft_open with app "${app}" first.`, true);
+    await this.host.workspace.check?.(path);
+    const seconds =Math.min(Math.max(Number(wait ?? FILE_WAIT_S) || 0, 0), 600);
+    const until = Date.now() + seconds * 1000;
+    let first;
+    for (;;) {
+      try {
+        first = await this.#tabFiles(app, { op: "read", name, offset: 0, length: FILE_PART }, extra);
+        break;
+      } catch (e) {
+        if (!/no saved file/i.test(e.message) || Date.now() >= until || extra.signal?.aborted) throw e;
+        await sleep(1000);
+      }
+    }
+    const size = Number(first.size) || 0;
+    if (size > MAX_FILE) return text(`${first.name} has ${(size / 1048576).toFixed(0)} MB; the workspace takes files of up to ${MAX_FILE >> 20} MB.`, true);
+    const parts = [Buffer.from(first.data ?? "", "base64")];
+    let got = parts[0].length;
+    while (got < size) {
+      const r = await this.#tabFiles(app, { op: "read", name, offset: got, length: FILE_PART }, extra);
+      const part = Buffer.from(r.data ?? "", "base64");
+      if (Number(r.size) !== size || !part.length) throw new Error(`${first.name} changed in ${tab.title} while it was being copied; try again.`);
+      parts.push(part);
+      got += part.length;
+    }
+    const bytes = Buffer.concat(parts, got);
+    const written = await this.host.workspace.write(path, new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+    return text(`Copied ${first.name} (${got} bytes) from ${tab.title} to ${written.path}.`);
+  }
+
   #waitFor(test, ms) {
     if (test()) return Promise.resolve(true);
     return new Promise((resolve) => {
@@ -310,12 +437,15 @@ export class Bridge {
       instructions: "Drives the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) open in the user's editor. " +
         "Call craft_apps to see what is open, craft_open to open an app; then use its <app>_<tool> tools (or craft_call). " +
         "The user watches the app while you work, so tell them what you are doing. " +
-        "Files: the apps run in a browser, not as desktop apps, so their --automation-read-root and --automation-write-root " +
-        "flags don't apply and are not needed. PhotoCraft's doc_open, doc_save and doc_export read and write " +
-        "files in the editor's workspace folders: pass an absolute path inside a folder open in the editor, e.g. " +
-        "/home/coder/project/out/cat.png. The editor's craft.workspaceFiles setting must allow it (readWrite, the default). " +
-        "Paths outside the workspace folders, and hidden folders, are refused. Tools that write several files at once " +
-        "(doc_export_layers, doc_export_data_sets) don't work in the browser: export one file at a time with doc_export.",
+        "Files: the apps run in a browser tab, not as desktop apps, so their --automation-read-root and " +
+        "--automation-write-root flags don't apply and are not needed, and an app's own tools can't read the workspace's files. " +
+        "To give an app a file from the workspace, call craft_send_file (it opens or imports the file as a drop would). " +
+        "To get a file out, save, export or render it with the app's own tool (the browser tab keeps the file instead " +
+        "of writing a disk path), then call craft_get_file with its name and the workspace path to write; craft_app_files " +
+        "lists what the tab keeps. PhotoCraft's doc_open, doc_save and doc_export also take workspace paths directly, " +
+        "e.g. /home/coder/project/out/cat.png; its doc_export_layers and doc_export_data_sets don't work in the browser. Workspace paths are absolute paths inside a folder open in the editor, or " +
+        "relative to the first folder; hidden folders and paths outside the folders are refused, and node_modules is " +
+        "read-only. The editor's craft.workspaceFiles setting must allow it (readWrite, the default).",
     });
     server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: this.listTools() }));
     server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {

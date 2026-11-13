@@ -121,16 +121,9 @@ the app page, and the page shows them in two places:
   app.
 - **Open in a Craft App.** Right-click a file in the explorer, choose **Open in a Craft App**, and
   pick the app.
-- **The coding agent opens and saves files by path.** An agent such as Claude Code can tell
-  PhotoCraft to open or save a file with an ordinary path, for example
-  `/home/coder/project/out/cat.png`. The path must be inside a workspace folder. The app page asks
-  the extension where that path is in the lent folders, and then reads or writes the file there.
-  The desktop apps need the flags `--automation-read-root` and `--automation-write-root` for this,
-  but those flags don't exist in the browser, so an agent doesn't need them here. PhotoCraft's
-  `doc_open`, `doc_save` and `doc_export` tools work this way. Its tools that write many files at
-  once, `doc_export_layers` and `doc_export_data_sets`, don't work in the browser yet. The PhotoCraft
-  image needs the matching change from `hayone1/Docker_Images`, and the hub needs
-  craft-web-gateway with the same change.
+- **The coding agent moves files in and out.** An agent such as Claude Code can send a workspace
+  file into any app and copy the files that an app saves back into the workspace. The section
+  [Files and the coding agent](#files-and-the-coding-agent) below explains how.
 
 A drag onto the app's panel itself doesn't work, and the cursor shows the "not allowed" sign. VS
 Code doesn't pass a drag that starts inside the editor (the explorer, for example) to an
@@ -169,6 +162,46 @@ The hub's overlay passes the requests between the app and the extension, and onl
 on an `EMBED_ORIGINS` origin. The feature needs a craft-web-gateway and app images from November 2026
 or later. File › Open and Save use the cloud storage hook, which PhotoCraft and VectorCraft have
 today. Opening a dragged file works in every app that accepts dropped files.
+
+### Files and the coding agent
+
+The apps run in a browser tab, so an app can't open a file on the workspace's disk by its path,
+and a file that an app saves goes to the browser instead of the disk. The desktop apps take the
+flags `--automation-read-root` and `--automation-write-root` for an agent's files, but those
+flags don't exist in the browser. The extension's MCP server therefore has three tools of its own
+that move the files:
+
+| Tool | What it does |
+| --- | --- |
+| `craft_send_file` | Sends a workspace file into an open app, as if the user had dropped the file on the app. |
+| `craft_app_files` | Lists the files that the app saved, exported or rendered in its tab. FilmCraft and EffectCraft also list the files in their own file tables. |
+| `craft_get_file` | Copies one of those files into the workspace, at the path that the agent names. |
+
+An agent names a workspace file by an absolute path inside a workspace folder, for example
+`/home/coder/project/media/clip.mp4`, or by a path relative to the first workspace folder, for
+example `media/clip.mp4`. The rules of the previous section hold here too, and so does the
+`craft.workspaceFiles` setting.
+
+To get a file out of an app, the agent first saves or exports it with the app's own tool and any
+file name, and then calls `craft_get_file` with that name. While the agent works, the app's tab
+keeps the file instead of starting a browser download. The table shows what each app does with a
+file that it receives, and which of its tools save a file.
+
+| App | A file sent with `craft_send_file` | Tools that save a file |
+| --- | --- | --- |
+| PhotoCraft | Opens as a document. | `doc_save`, `doc_export`. These two also take a workspace path directly. |
+| VectorCraft | Opens as a document. | `save_file`, `export`. |
+| LightCraft | Goes into the library. A dialog in front, such as the Welcome window, holds the file until the dialog closes. | `export`. |
+| FilmCraft | Goes into the project as media. A `.fcproj` file opens as the project. | `command_run` with `file.saveAs`, `file.exportFrame` and the other export commands. |
+| EffectCraft | Goes into the app's file table at `/<name>`, and the app imports it. A `.ecproj` file opens as the project. | `save_project`, and renders. |
+
+The tab keeps the last 32 files, up to 1 GB in all. A file larger than 200 MB can't be copied
+into the workspace. PhotoCraft's `doc_export_layers` and `doc_export_data_sets` write many files
+at once and don't work in the browser.
+
+The bytes travel from the extension through the relay (craft-mcp) to the app's tab. The tools
+need the craft-mcp relay and the app images from `hayone1/Docker_Images` of November 2026 or later.
+An older relay answers that it "doesn't take files".
 
 ## Install
 

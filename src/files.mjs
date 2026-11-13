@@ -173,6 +173,12 @@ export function workspaceFiles({ folders, fs, mode = () => "readWrite" }) {
       }
       return { files };
     },
+    // Whether `path` may be written (a file, or a new one), without writing it: the checks of write.
+    async writable({ path }) {
+      const r = await checked(path, { file: true, write: true });
+      if ((await fs.stat(r.uri))?.type === "dir") throw new Refused(`${path} is a folder.`);
+      return { path };
+    },
     // A file system path (an AI assistant names files so) to the page's path for it. Only the
     // place is checked here; reading and writing the path check it again.
     async place({ path }) {
