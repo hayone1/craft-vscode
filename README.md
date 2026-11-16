@@ -267,9 +267,11 @@ An older relay answers that it "doesn't take files".
 
 ## Install
 
-The quickest way to try everything is [Craft Studio](https://github.com/hayone1/craft-studio).
-Craft Studio deploys code-server with Claude Code, this extension, the relay and the five apps in
-one step, with buttons for Railway, Render and Hostinger, a Docker Compose file and a Helm chart.
+The quickest way to try everything is [Craft Code](https://github.com/hayone1/craft-code). Craft
+Code deploys code-server with Claude Code, this extension, the relay and the five apps in one step.
+Craft Code has two options. craft-vscode is a studio for one person, with buttons for Railway,
+Render and Hostinger. craft-coder is a [Coder](https://coder.com) server for a team, where each
+person gets their own workspace. Both options come with a Docker Compose file and a Helm chart.
 The rest of this section sets up the extension on its own.
 
 Install **Craft Apps** (`hayone1.craft-vscode`) from the Visual Studio Marketplace in VS Code, or
