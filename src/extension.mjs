@@ -48,7 +48,9 @@ const apps = () => {
   const names = settings().get("apps");
   const env = (process.env.CRAFT_APPS ?? "").split(",").filter((n) => n.trim());
   const list = Array.isArray(names) && names.length ? names : env.length ? env : DEFAULT_APPS;
-  return list.map((n) => String(n).trim().toLowerCase()).filter((n) => /^[a-z0-9-]+$/.test(n))
+  // craft.showApps: {app: false} hides an app everywhere: the list, the picker and the agents.
+  const shown = settings().get("showApps") ?? {};
+  return list.map((n) => String(n).trim().toLowerCase()).filter((n) => /^[a-z0-9-]+$/.test(n) && shown[n] !== false)
     .map((name) => ({ name, title: CATALOG[name] ?? name[0].toUpperCase() + name.slice(1) }));
 };
 const titleOf = (app) => apps().find((a) => a.name === app)?.title ?? CATALOG[app] ?? app;
@@ -170,6 +172,8 @@ export async function activate(context) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration("craft.workspaceFiles") && lendAgain()),
     vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration("craft.relayUrl") && sessions.clear()),
+    vscode.workspace.onDidChangeConfiguration((e) =>
+      (e.affectsConfiguration("craft.apps") || e.affectsConfiguration("craft.showApps")) && changed.fire()),
     vscode.workspace.onDidGrantWorkspaceTrust(lendAgain),
     vscode.workspace.onDidChangeWorkspaceFolders(lendAgain),
   );
@@ -709,6 +713,11 @@ const onDisk = (uri) => uri.scheme === "file";
 const files = workspaceFiles({
   folders: () => (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, uri: f.uri })),
   mode: filesMode,
+  // An app's Save As or export (craft-embed.js): the person picks the file in the editor.
+  pickSave: async (near, name) => {
+    const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.joinPath(near, name), title: `Save ${name}` });
+    return uri ? uri.toString() : null;
+  },
   fs: {
     join: (uri, ...p) => vscode.Uri.joinPath(uri, ...p),
     stat: async (uri) => {

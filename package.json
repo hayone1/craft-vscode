@@ -2,7 +2,7 @@
   "name": "craft-vscode",
   "displayName": "Craft Apps",
   "description": "Open the craft apps (PhotoCraft, VectorCraft, LightCraft, FilmCraft, EffectCraft) in editor panels, and let Claude Code, Codex, Gemini CLI or VS Code chat drive them over one local MCP server.",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "publisher": "hayone1",
   "license": "MIT",
   "repository": {
@@ -187,6 +187,54 @@
           },
           "default": [],
           "markdownDescription": "The apps, in order. Empty: `CRAFT_APPS` (comma separated), else PhotoCraft, VectorCraft, LightCraft, FilmCraft and EffectCraft."
+        },
+        "craft.showApps": {
+          "type": "object",
+          "properties": {
+            "photocraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show PhotoCraft."
+            },
+            "vectorcraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show VectorCraft."
+            },
+            "lightcraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show LightCraft."
+            },
+            "filmcraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show FilmCraft."
+            },
+            "effectcraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show EffectCraft."
+            },
+            "wordcraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show WordCraft."
+            },
+            "gridcraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show GridCraft."
+            },
+            "deckcraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show DeckCraft."
+            }
+          },
+          "additionalProperties": false,
+          "default": {},
+          "markdownDescription": "Turn an app off to hide it: the Craft Apps list, **Craft: Open App** and the coding agents then leave it out. Every app is shown by default."
         },
         "craft.mcpPort": {
           "type": "number",

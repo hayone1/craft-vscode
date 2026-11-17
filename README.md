@@ -225,6 +225,13 @@ or later. File › Open and Save use the cloud storage hook, which PhotoCraft an
 today. Opening a dragged file works in every app that accepts dropped files. A container with
 `EMBED_FILES=false` doesn't take the editor's files at all.
 
+WordCraft, GridCraft and DeckCraft save differently. These apps hand every file that they save
+to the page instead of downloading it. A Save of a file that came from the workspace writes the
+file back without a question. Save As, exports and new documents open VS Code's **Save** dialog,
+which starts in the document's folder. When you cancel the dialog, the document stays unsaved.
+While a coding agent drives the app, no dialog opens: the app keeps the file for the agent, which
+copies it with `craft_app_files` and `craft_get_file`.
+
 ### Files and the coding agent
 
 The apps run in a browser tab, so an app can't open a file on the workspace's disk by its path,
@@ -256,6 +263,9 @@ file that it receives, and which of its tools save a file.
 | LightCraft | Goes into the library. A dialog in front, such as the Welcome window, holds the file until the dialog closes. | `export`. |
 | FilmCraft | Goes into the project as media. A `.fcproj` file opens as the project. | `command_run` with `file.saveAs`, `file.exportFrame` and the other export commands. |
 | EffectCraft | Goes into the app's file table at `/<name>`, and the app imports it. A `.ecproj` file opens as the project. | `save_project`, and renders. |
+| WordCraft | Opens as a document. | `save_document`. |
+| GridCraft | Opens as a workbook. | `execute_command` with `file.save` or `file.saveAs`. |
+| DeckCraft | Opens as a presentation. | `save_presentation`, `export`. |
 
 The tab keeps the last 32 files, up to 1 GB in all. A file larger than 200 MB can't be copied
 into the workspace. PhotoCraft's `doc_export_layers` and `doc_export_data_sets` write many files
@@ -315,6 +325,7 @@ itself. To choose the MCP token yourself, also set `CRAFT_MCP_TOKEN` in the agen
 | `craft.appUrl` | `CRAFT_APP_URL` | Where the apps are, e.g. `https://{app}.example.com/`. `craft.hubUrl` and `CRAFT_HUB_URL`, the names before version 0.5, still work. |
 | `craft.relayUrl` | `CRAFT_RELAY_URL` | The relay's address, when the editor asks the relay itself. The token comes from `CRAFT_RELAY_TOKEN` or **Craft: Set the Relay Token**, which keeps the token in the editor's secret storage. |
 | `craft.apps` | `CRAFT_APPS`, else the five apps | The apps, in order. |
+| `craft.showApps` | every app on | A switch for each app. Turn an app off to hide it from the Craft Apps list, from **Craft: Open App** and from the coding agents. |
 | `craft.mcpPort` | `47811` | The local MCP server's port. |
 | `craft.agents` | `["claude", "codex", "gemini"]` | The coding agents that get the server. |
 | `craft.workspaceFiles` | `"readWrite"` | What the app panels may do with the workspace folders: `"readWrite"`, `"readOnly"` or `"off"` (see "Workspace files"). |

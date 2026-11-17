@@ -62,8 +62,11 @@ export function bytesOf(v) {
  *   locatePath(fsPath) -> the same for a file system path (absolute, as the editor's machine
  *     names it), or null.
  * @param {() => "readWrite"|"readOnly"|"off"} [o.mode] what the page may do right now
+ * @param {(near: any, name: string) => Promise<string|null>} [o.pickSave] asks the person where to
+ *   save a file: a save dialog that starts in the folder `near` (a URI) with `name` filled in.
+ *   The answer is the chosen URI as a string, or null when the person cancels.
  */
-export function workspaceFiles({ folders, fs, mode = () => "readWrite" }) {
+export function workspaceFiles({ folders, fs, mode = () => "readWrite", pickSave }) {
   // The folders by the name a path uses: made a valid path part, and a repeated name gets
   // " (2)", " (3)", ...
   function named() {
@@ -178,6 +181,31 @@ export function workspaceFiles({ folders, fs, mode = () => "readWrite" }) {
       const r = await checked(path, { file: true, write: true });
       if ((await fs.stat(r.uri))?.type === "dir") throw new Refused(`${path} is a folder.`);
       return { path };
+    },
+    // An app saves a file that has no place in the workspace yet (Save As, an export): the person
+    // picks one in the editor's save dialog. `near` is a page path whose folder the dialog starts
+    // in. The answer is the page path for the chosen file, checked as write checks it, or null
+    // when the person cancels. The page writes the file with write.
+    async saveAs({ name, near }) {
+      if (!pickSave) throw new Refused("The editor can't ask where to save.");
+      if (mode() !== "readWrite") throw new Refused("The editor shares this workspace read-only (craft.workspaceFiles).");
+      const file = String(name ?? "").split(/[\\/]/).pop().slice(0, 255) || "Untitled";
+      let start = named()[0]?.uri;
+      if (!start) throw new Refused("No folder is open in the editor.");
+      if (typeof near === "string" && near) {
+        try {
+          const r = await checked(near);
+          if (r.uri) start = r.rest.length ? fs.join(r.root.uri, ...r.rest.slice(0, -1)) : r.uri;
+        } catch {} // a path that no longer works: start at the first folder
+      }
+      const chosen = await pickSave(start, file);
+      if (chosen == null) return null;
+      const at = fs.locate(String(chosen));
+      if (!at) throw new Refused("Pick a place inside a workspace folder.");
+      const path = pathOf(at);
+      const r = await checked(path, { file: true, write: true });
+      if ((await fs.stat(r.uri))?.type === "dir") throw new Refused(`${path} is a folder.`);
+      return path;
     },
     // A file system path (an AI assistant names files so) to the page's path for it. Only the
     // place is checked here; reading and writing the path check it again.
