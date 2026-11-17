@@ -180,3 +180,33 @@ test("a link to a hidden folder, and node_modules, are off limits; odd folder na
   assert.equal((await call("write", { path: "deps/x/index.js", bytes: [1] })).ok, false, "a link into node_modules");
   assert.equal(readFileSync(join(root, "node_modules", "x", "index.js"), "utf8"), "ok");
 });
+
+test("saveAs asks the editor where to save: near the document's folder, inside the workspace only", async () => {
+  const root = temp();
+  mkdirSync(join(root, "docs"));
+  const asked = [];
+  let answer = null;
+  const handle = workspaceFiles({
+    folders: () => [{ name: "site", uri: root }], fs: nodeFs([root]),
+    pickSave: async (near, name) => { asked.push([near, name]); return answer; },
+  });
+  const call = (args) => handle({ type: "craft-embed:files", id: "1", op: "saveAs", ...args });
+
+  answer = `file://${join(root, "docs", "Report.pdf")}`;
+  const r = await call({ name: "Report.pdf", near: "docs/Report.docx" });
+  assert.ok(r.ok, r.error);
+  assert.equal(r.value, "docs/Report.pdf");
+  assert.deepEqual(asked.at(-1), [join(root, "docs"), "Report.pdf"]);
+
+  answer = null; // the person cancels
+  assert.equal((await call({ name: "../x.txt" })).value, null);
+  assert.deepEqual(asked.at(-1), [root, "x.txt"]);
+
+  answer = `file://${join(temp(), "away.txt")}`;
+  assert.equal((await call({ name: "away.txt" })).ok, false);
+  answer = `file://${join(root, ".vscode", "settings.json")}`;
+  assert.equal((await call({ name: "settings.json" })).ok, false);
+
+  const readOnly = workspaceFiles({ folders: () => [{ name: "site", uri: root }], fs: nodeFs([root]), mode: () => "readOnly", pickSave: async () => answer });
+  assert.equal((await readOnly({ op: "saveAs", name: "a.txt" })).ok, false);
+});

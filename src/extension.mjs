@@ -713,6 +713,11 @@ const onDisk = (uri) => uri.scheme === "file";
 const files = workspaceFiles({
   folders: () => (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, uri: f.uri })),
   mode: filesMode,
+  // An app's Save As or export (craft-embed.js): the person picks the file in the editor.
+  pickSave: async (near, name) => {
+    const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.joinPath(near, name), title: `Save ${name}` });
+    return uri ? uri.toString() : null;
+  },
   fs: {
     join: (uri, ...p) => vscode.Uri.joinPath(uri, ...p),
     stat: async (uri) => {
