@@ -315,6 +315,7 @@ itself. To choose the MCP token yourself, also set `CRAFT_MCP_TOKEN` in the agen
 | `craft.appUrl` | `CRAFT_APP_URL` | Where the apps are, e.g. `https://{app}.example.com/`. `craft.hubUrl` and `CRAFT_HUB_URL`, the names before version 0.5, still work. |
 | `craft.relayUrl` | `CRAFT_RELAY_URL` | The relay's address, when the editor asks the relay itself. The token comes from `CRAFT_RELAY_TOKEN` or **Craft: Set the Relay Token**, which keeps the token in the editor's secret storage. |
 | `craft.apps` | `CRAFT_APPS`, else the five apps | The apps, in order. |
+| `craft.showApps` | every app on | A switch for each app. Turn an app off to hide it from the Craft Apps list, from **Craft: Open App** and from the coding agents. |
 | `craft.mcpPort` | `47811` | The local MCP server's port. |
 | `craft.agents` | `["claude", "codex", "gemini"]` | The coding agents that get the server. |
 | `craft.workspaceFiles` | `"readWrite"` | What the app panels may do with the workspace folders: `"readWrite"`, `"readOnly"` or `"off"` (see "Workspace files"). |

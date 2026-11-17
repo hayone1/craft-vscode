@@ -188,6 +188,39 @@
           "default": [],
           "markdownDescription": "The apps, in order. Empty: `CRAFT_APPS` (comma separated), else PhotoCraft, VectorCraft, LightCraft, FilmCraft and EffectCraft."
         },
+        "craft.showApps": {
+          "type": "object",
+          "properties": {
+            "photocraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show PhotoCraft."
+            },
+            "vectorcraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show VectorCraft."
+            },
+            "lightcraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show LightCraft."
+            },
+            "filmcraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show FilmCraft."
+            },
+            "effectcraft": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show EffectCraft."
+            }
+          },
+          "additionalProperties": false,
+          "default": {},
+          "markdownDescription": "Turn an app off to hide it: the Craft Apps list, **Craft: Open App** and the coding agents then leave it out. Every app is shown by default."
+        },
         "craft.mcpPort": {
           "type": "number",
           "default": 47811,
