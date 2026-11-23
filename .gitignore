@@ -4,3 +4,4 @@ dist/
 .env
 HANDOFF*.md
 .recordings/
+.mcp.json
